@@ -1,0 +1,68 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+logoFile = "icon.png"
+credits = "Inspired by Nvidium (by cortex)"
+
+[[mods]]
+    modId          = "${mod_id}"
+    version        = "${mod_version}"
+    displayName    = "${mod_name}"
+    description    = '''
+${mod_description}
+'''
+
+[[dependencies.amdium]]
+    modId      = "forge"
+    mandatory  = true
+    versionRange = "${forge_version_range}"
+    ordering   = "NONE"
+    side       = "CLIENT"
+
+[[dependencies.amdium]]
+    modId      = "minecraft"
+    mandatory  = true
+    versionRange = "${minecraft_version_range}"
+    ordering   = "NONE"
+    side       = "CLIENT"
+
+# Embedium — опциональная интеграция (режим MDI-ускорителя).
+# / Embedium — optional integration (MDI-accelerator mode).
+#
+# ВАЖНО / IMPORTANT:
+# Embedium содержит MixinTaintDetector, который помечает любой мод, делающий mixin
+# во внутренние классы Embedium (пакеты me.jellysquid.mods.sodium.* и
+# org.embeddedt.embeddium.*). Чтобы детектор не считал Amdium "tainting"-модом,
+# нужно объявить зависимость с ОДНОЙ зафиксированной версией (single-version range),
+# т.е. lower bound == upper bound.
+# / Embedium ships a MixinTaintDetector that flags any mod mixing into Embeddium
+# internals (packages me.jellysquid.mods.sodium.* and org.embeddedt.embeddium.*).
+# To prevent the detector from marking Amdium as a "tainting" mod, a dependency with
+# a SINGLE pinned version (single-version range, i.e. lower bound == upper bound)
+# must be declared.
+#
+# Версия 0.3.31 — это версия, против которой Amdium компилируется (см. build.gradle:
+# compileOnly fg.deobf("maven.modrinth:embeddium:0.3.31+mc1.20.1")).
+# / Version 0.3.31 is the version Amdium compiles against (see build.gradle).
+#
+# ordering = "AFTER" гарантирует, что классы Embedium загружены ДО применения mixin'а
+# Amdium в ImmediateDrawCommandList.
+# / ordering = "AFTER" guarantees Embeddium classes are loaded BEFORE Amdium's mixin
+# into ImmediateDrawCommandList is applied.
+[[dependencies.amdium]]
+    modId      = "embeddium"
+    mandatory  = false
+    versionRange = "[0.3.31]"
+    ordering   = "AFTER"
+    side       = "CLIENT"
+
+# Rubidium-stub (Embeddium объявляет себя как замену Rubidium, поэтому rubidium
+# тоже указываем на случай, если установлен именно Rubidium).
+# / Rubidium-stub (Embeddium declares itself as a Rubidium replacement, so we also
+# pin rubidium in case the real Rubidium is installed).
+[[dependencies.amdium]]
+    modId      = "rubidium"
+    mandatory  = false
+    versionRange = "[0.7.1]"
+    ordering   = "AFTER"
+    side       = "CLIENT"
