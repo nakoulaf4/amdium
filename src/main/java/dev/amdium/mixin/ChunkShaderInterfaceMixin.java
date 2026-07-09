@@ -1,6 +1,7 @@
 package dev.amdium.mixin;
 
 import dev.amdium.render.InteropComputeCuller;
+import me.jellysquid.mods.sodium.client.render.chunk.shader.ChunkShaderInterface;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -22,14 +23,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * / The capture lets Amdium compute the region AABB = [origin, origin + (128,64,128)]
  * and pass it to the compute shader for frustum + fog culling.
  *
- * Класс ChunkShaderInterface — public, метод setRegionOffset — public, поэтому
- * параметры обработчика — настоящие типы (float, float, float). Mixin применяется
- * только при наличии Embeddium (AmdiumMixinPlugin).
- * / The ChunkShaderInterface class is public, the setRegionOffset method is public,
- * so the handler parameters are real types (float, float, float). The mixin is
- * applied only when Embeddium is present (AmdiumMixinPlugin).
+ * Класс ChunkShaderInterface — public (доступен на compileOnly-classpath), поэтому
+ * используем value = ChunkShaderInterface.class вместо строковой формы targets.
+ * Это позволяет Mixin AP верифицировать цель и сигнатуры методов на этапе компиляции.
+ * / The ChunkShaderInterface class is public (available on the compileOnly classpath),
+ * so we use value = ChunkShaderInterface.class instead of the string targets form.
+ * This lets the Mixin AP verify the target and method signatures at compile time.
+ *
+ * Mixin применяется только при наличии Embeddium (AmdiumMixinPlugin).
+ * / The mixin is applied only when Embeddium is present (AmdiumMixinPlugin).
  */
-@Mixin(targets = "me.jellysquid.mods.sodium.client.render.chunk.shader.ChunkShaderInterface", remap = false)
+@Mixin(value = ChunkShaderInterface.class, remap = false)
 public class ChunkShaderInterfaceMixin {
 
     @Inject(

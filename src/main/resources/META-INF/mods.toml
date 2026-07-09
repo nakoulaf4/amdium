@@ -52,7 +52,7 @@ ${mod_description}
 [[dependencies.amdium]]
     modId      = "embeddium"
     mandatory  = false
-    versionRange = "[0.3.31]"
+    versionRange = "[0.3.31, 0.4.0)"
     ordering   = "AFTER"
     side       = "CLIENT"
 
