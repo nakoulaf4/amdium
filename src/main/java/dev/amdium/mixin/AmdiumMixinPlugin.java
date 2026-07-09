@@ -1,6 +1,7 @@
 package dev.amdium.mixin;
 
 import net.minecraftforge.fml.ModList;
+import net.minecraftforge.fml.loading.FMLLoader;
 import org.objectweb.asm.tree.ClassNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,31 +20,31 @@ import java.util.Set;
  * Зачем это нужно / Why this is needed:
  *
  * 1. EmbeddiumDrawCommandListMixin ссылается на классы Embeddium
- *    (MultiDrawBatch, GlIndexType) напрямую. Если Embeddium не установлен, попытка
- *    загрузить этот mixin-класс бросит NoClassDefFoundError. Плагин НЕ применяет
- *    этот mixin, когда Embeddium нет — класс просто не загружается.
- *    / EmbeddiumDrawCommandListMixin references Embeddium classes
- *    (MultiDrawBatch, GlIndexType) directly. If Embeddium is not installed, loading
- *    this mixin class would throw NoClassDefFoundError. The plugin does NOT apply
- *    this mixin when Embeddium is absent — the class is simply never loaded.
+ * (MultiDrawBatch, GlIndexType) напрямую. Если Embeddium не установлен, попытка
+ * загрузить этот mixin-класс бросит NoClassDefFoundError. Плагин НЕ применяет
+ * этот mixin, когда Embeddium нет — класс просто не загружается.
+ * / EmbeddiumDrawCommandListMixin references Embeddium classes
+ * (MultiDrawBatch, GlIndexType) directly. If Embeddium is not installed, loading
+ * this mixin class would throw NoClassDefFoundError. The plugin does NOT apply
+ * this mixin when Embeddium is absent — the class is simply never loaded.
  *
  * 2. Vanilla mixin'ы (LevelRendererMixin, VertexBufferMixin, RenderChunkMixin)
- *    нужны ТОЛЬКО в режиме полного vanilla path (когда Embeddium НЕ установлен).
- *    Когда Embeddium есть — Embeddium сам заменяет chunk renderer, и наши mixin'ы
- *    на vanilla-классы бесполезны (они всё равно проверяют Amdium.active и выходят).
- *    Плагин пропускает их, чтобы не плодить лишний bytecode и не рисковать
- *    конфликтами точек инъекции с mixin'ами Embeddium.
- *    / Vanilla mixins (LevelRendererMixin, VertexBufferMixin, RenderChunkMixin)
- *    are only needed in full-vanilla-path mode (when Embeddium is NOT installed).
- *    When Embeddium is present, Embeddium itself replaces the chunk renderer, and
- *    our mixins on vanilla classes are useless (they check Amdium.active and bail
- *    anyway). The plugin skips them to avoid extra bytecode and reduce the risk of
- *    injection-point conflicts with Embeddium's own mixins.
+ * нужны ТОЛЬКО в режиме полного vanilla path (когда Embeddium НЕ установлен).
+ * Когда Embeddium есть — Embeddium сам заменяет chunk renderer, и наши mixin'ы
+ * на vanilla-классы бесполезны (они всё равно проверяют Amdium.active и выходят).
+ * Плагин пропускает их, чтобы не плодить лишний bytecode и не рисковать
+ * конфликтами точек инъекции с mixin'ами Embeddium.
+ * / Vanilla mixins (LevelRendererMixin, VertexBufferMixin, RenderChunkMixin)
+ * are only needed in full-vanilla-path mode (when Embeddium is NOT installed).
+ * When Embeddium is present, Embeddium itself replaces the chunk renderer, and
+ * our mixins on vanilla classes are useless (they check Amdium.active and bail
+ * anyway). The plugin skips them to avoid extra bytecode and reduce the risk of
+ * injection-point conflicts with Embeddium's own mixins.
  *
  * 3. MinecraftMixin (cleanup на shutdown) и EmbeddiumDrawCommandListMixin применяются
- *    по условию наличия Embeddium.
- *    / MinecraftMixin (cleanup on shutdown) is always applied;
- *    EmbeddiumDrawCommandListMixin is applied only when Embeddium is present.
+ * по условию наличия Embeddium.
+ * / MinecraftMixin (cleanup on shutdown) is always applied;
+ * EmbeddiumDrawCommandListMixin is applied only when Embeddium is present.
  */
 public class AmdiumMixinPlugin implements IMixinConfigPlugin {
 
@@ -64,8 +65,8 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
         // / Check for Embedium/Rubidium ONCE when the config loads.
         // ModList might not be ready at the very early stage, so guard against that.
         try {
-            boolean emb = ModList.get() != null && ModList.get().isLoaded("embeddium");
-            boolean rub = ModList.get() != null && ModList.get().isLoaded("rubidium");
+            boolean emb = FMLLoader.getLoadingModList().getModFileById("embeddium") != null;
+            boolean rub = FMLLoader.getLoadingModList().getModFileById("rubidium") != null;
             embeddiumPresent = emb;
             rubidiumPresent = rub;
             LOGGER.info("[Amdium] MixinPlugin onLoad: embeddium={}, rubidium={}", emb, rub);
@@ -86,8 +87,8 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
     private boolean hasSodiumLikeRenderer() {
         if (embeddiumPresent == null || rubidiumPresent == null) {
             try {
-                embeddiumPresent = ModList.get() != null && ModList.get().isLoaded("embeddium");
-                rubidiumPresent = ModList.get() != null && ModList.get().isLoaded("rubidium");
+                embeddiumPresent = FMLLoader.getLoadingModList().getModFileById("embeddium") != null;
+                rubidiumPresent = FMLLoader.getLoadingModList().getModFileById("rubidium") != null;
             } catch (Throwable t) {
                 return false;
             }
