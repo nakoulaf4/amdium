@@ -1,5 +1,13 @@
 #version 430 core
 
+// Включаем расширение для поддержки параметров отрисовки (MDI) на строгих драйверах (Mesa/Linux)
+#extension GL_ARB_shader_draw_parameters : enable
+
+// Если чистый gl_BaseInstance не объявлен в рантайме, подменяем его на версию из расширения ARB
+#ifndef gl_BaseInstance
+#define gl_BaseInstance gl_BaseInstanceARB
+#endif
+
 // ============================================================
 //  Amdium — Vertex Shader для MDI terrain rendering
 //  / Amdium — Vertex Shader for MDI terrain rendering
@@ -44,10 +52,7 @@ uniform float u_FogStart;
 uniform float u_FogEnd;
 
 void main() {
-    // gl_BaseInstance = slot (передаём через DrawElementsIndirectCommand.baseInstance)
-    // / gl_BaseInstance = slot (passed via DrawElementsIndirectCommand.baseInstance)
-    // На старых драйверах gl_BaseInstanceARB; в 430 core gl_BaseInstance доступен.
-    // / On older drivers use gl_BaseInstanceARB; in 430 core gl_BaseInstance is available.
+    // Теперь gl_BaseInstance гарантированно скомпилируется благодаря макросу выше
     int slot = int(gl_BaseInstance);
     vec3 origin = origins[slot].xyz;
 
