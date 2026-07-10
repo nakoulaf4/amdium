@@ -105,8 +105,18 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         // Embeddium-специфичные mixin'ы — только если Embeddium/Rubidium установлен.
         // / Embeddium-specific mixins — only if Embeddium/Rubidium is installed.
+        //
+        // v2.2 FIX: добавлены SectionRenderDataStorageMixin и RenderRegionMixin —
+        // они тоже ссылаются на классы Embeddium (SectionRenderDataStorage, RenderRegion,
+        // SectionRenderDataUnsafe, ModelQuadFacing, LocalSectionIndex).
+        // / v2.2 FIX: added SectionRenderDataStorageMixin and RenderRegionMixin —
+        // they also reference Embeddium classes (SectionRenderDataStorage, RenderRegion,
+        // SectionRenderDataUnsafe, ModelQuadFacing, LocalSectionIndex).
         if (mixinClassName.endsWith("EmbeddiumDrawCommandListMixin")
-                || mixinClassName.endsWith("ChunkShaderInterfaceMixin")) {
+                || mixinClassName.endsWith("ChunkShaderInterfaceMixin")
+                || mixinClassName.endsWith("RenderSectionMixin")
+                || mixinClassName.endsWith("SectionRenderDataStorageMixin")
+                || mixinClassName.endsWith("RenderRegionMixin")) {
             boolean apply = hasSodiumLikeRenderer();
             if (!apply) {
                 LOGGER.info("[Amdium] Пропускаю {} — Embeddium/Rubidium не обнаружен.",

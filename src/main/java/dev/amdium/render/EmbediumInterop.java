@@ -10,31 +10,28 @@ import org.lwjgl.system.MemoryUtil;
 import java.nio.ByteBuffer;
 
 /**
- * Перехватчик draw-вызовов Embedium.
- * / Embedium draw-call interceptor.
+ * Перехватчик draw-вызовов Embedium. v2.2 — с per-command + Hi-Z GPU culling.
+ * / Embedium draw-call interceptor. v2.2 — with per-command + Hi-Z GPU culling.
  *
- * Два пути:
- * / Two paths:
+ * Пути:
+ * / Paths:
  *
- *  === Путь A: GPU-compute culling (рекомендуется, требует GL 4.3 + ARB_indirect_parameters) ===
- *    1. CPU копирует MultiDrawBatch → input SSBO.
- *    2. Compute-шейдер куллит регион (frustum + fog), компактирует команды,
- *       atomicAdd → counter buffer.
- *    3. glMultiDrawElementsIndirectCount — GPU читает drawCount из parameter buffer.
- *       **Нуль readback.** Nvidium-style pipeline.
+ *  === Путь A: GPU-compute culling (v2.2, per-command + Hi-Z) ===
+ *    Требует:
+ *      - AmdiumConfig.ENABLE_INTEROP_COMPUTE_CULLING = true,
+ *      - PerCommandMetadata не пуст (mixin в RenderSection сработал),
+ *      - InteropComputeCuller инициализирован (compute + indirect_parameters).
+ *    Делает:
+ *      1. CPU строит per-command chunkInfo SSBO (baseVertex → AABB lookup).
+ *      2. Compute-шейдер куллит per-command: frustum + fog + Hi-Z occlusion.
+ *      3. glMultiDrawElementsIndirectCount — нуль readback.
  *
- *  === Путь B: прямой MDI (fallback, без compute) ===
- *    1. CPU конвертирует MultiDrawBatch → GL_DRAW_INDIRECT_BUFFER.
- *    2. glMultiDrawElementsIndirect (count = CPU-known).
+ *  === Путь B: прямой MDI (fallback, без culling) ===
+ *    Если путь A недоступен — обычный glMultiDrawElementsIndirect с CPU-provided count.
  *    Проще, но count известен CPU (не zero-readback).
  *
- *  Путь A включается, если:
- *  / Path A is enabled if:
- *    - AmdiumConfig.ENABLE_INTEROP_COMPUTE_CULLING = true,
- *    - InteropComputeCuller инициализирован (compute + indirect_parameters поддерживаются).
- *
- *  Если путь A недоступен — fallback на путь B.
- *  / If path A is unavailable — fall back to path B.
+ *  Путь A включается, если все условия выше выполнены. Иначе — путь B.
+ * / Path A is enabled if all conditions above are met. Otherwise — path B.
  */
 public class EmbediumInterop {
 
@@ -50,26 +47,37 @@ public class EmbediumInterop {
 
     // Кадровые данные, захваченные LevelRendererMixin для пути A.
     // / Per-frame data captured by LevelRendererMixin for path A.
-    private static float[] frameProjView = new float[16];
+    private static float[] frameProjView    = new float[16];
+    private static float[] frameView        = new float[16];
+    private static float[] frameProjection  = new float[16];
     private static float frameCamX, frameCamY, frameCamZ;
     private static float frameFogStart, frameFogEnd;
     private static boolean hasFrameData = false;
 
-    // Примитивный тип — GL_TRIANGLES (chunk meshing всегда треугольники).
     private static final int DEFAULT_PRIMITIVE = org.lwjgl.opengl.GL11.GL_TRIANGLES;
 
-    /** Данные кадра от LevelRendererMixin (interop-режим). / Per-frame data from LevelRendererMixin (interop mode). */
-    public static void setFrameData(float[] projView, float camX, float camY, float camZ,
+    /**
+     * Данные кадра от LevelRendererMixin (interop-режим).
+     * / Per-frame data from LevelRendererMixin (interop mode).
+     *
+     * v2.2: теперь принимает view и projection ОТДЕЛЬНО (для Hi-Z NDC conversion),
+     * в дополнение к projView.
+     * / v2.2: now accepts view and projection SEPARATELY (for Hi-Z NDC conversion),
+     * in addition to projView.
+     */
+    public static void setFrameData(float[] projView, float[] view, float[] projection,
+                                     float camX, float camY, float camZ,
                                      float fogStart, float fogEnd) {
         System.arraycopy(projView, 0, frameProjView, 0, 16);
+        System.arraycopy(view, 0, frameView, 0, 16);
+        System.arraycopy(projection, 0, frameProjection, 0, 16);
         frameCamX = camX; frameCamY = camY; frameCamZ = camZ;
         frameFogStart = fogStart; frameFogEnd = fogEnd;
         hasFrameData = true;
     }
 
     /**
-     * Инициализация. Вызывается из Amdium.initGPU().
-     * / Initialization. Called from Amdium.initGPU().
+     * Инициализация. / Initialization.
      */
     public static void init(boolean supportsIndirectParameters) {
         int maxCommands = 4096;
@@ -82,53 +90,43 @@ public class EmbediumInterop {
 
         cpuStaging = MemoryUtil.memAlloc((int) indirectBufferSize);
 
-        // Инициализируем compute-culler, если включён в конфиге и GPU поддерживает.
-        // / Initialize the compute culler if enabled in config and GPU supports it.
+        // Initialize v2.2 compute culler.
         boolean computeEnabled = AmdiumConfig.ENABLE_INTEROP_COMPUTE_CULLING.get();
         boolean canCompute = Amdium.supportsCompute && Amdium.supportsIndirectParameters;
         if (computeEnabled && canCompute) {
             InteropComputeCuller.init();
         } else {
-            LOGGER.info("[Amdium] Interop compute-culling отключён (config={}, compute={}, indirectParams={}). "
+            LOGGER.info("[Amdium] v2.2 interop compute-culling отключён (config={}, compute={}, indirectParams={}). "
                     + "Используется прямой MDI-путь.",
                     computeEnabled, Amdium.supportsCompute, Amdium.supportsIndirectParameters);
-            // / [Amdium] Interop compute-culling disabled. Using direct MDI path.
         }
 
         LOGGER.info("[Amdium] Embedium interop готов. max commands={}, compute-culler={}",
                 maxCommands, InteropComputeCuller.isInitialized());
-        // / [Amdium] Embedium interop ready.
     }
 
     /**
      * Перехват multiDrawElementsBaseVertex из Embedium.
      * / Intercept multiDrawElementsBaseVertex from Embedium.
-     *
-     * @param pElementPointer native pointer на long[] (byte offsets в IBO)
-     * @param pElementCount   native pointer на int[] (кол-во индексов)
-     * @param pBaseVertex     native pointer на int[] (base vertex offsets)
-     * @param size            кол-во команд
-     * @param indexTypeSize   размер индекса (4 для UNSIGNED_INT)
-     * @param indexTypeFormat GL-константа типа индекса (GL_UNSIGNED_INT и т.д.)
      */
     public static void interceptMultiDraw(long pElementPointer, long pElementCount,
                                            long pBaseVertex, int size, int indexTypeSize,
                                            int indexTypeFormat) {
         if (size <= 0) return;
 
-        // --- Путь A: GPU-compute culling ---
+        // --- Путь A: GPU-compute culling (v2.2) ---
         if (InteropComputeCuller.isInitialized() && hasFrameData) {
             boolean ok = InteropComputeCuller.drawWithCulling(
                     pElementPointer, pElementCount, pBaseVertex,
                     size, indexTypeSize, indexTypeFormat,
-                    frameProjView, frameCamX, frameCamY, frameCamZ,
+                    frameProjView, frameView, frameProjection,
+                    frameCamX, frameCamY, frameCamZ,
                     frameFogStart, frameFogEnd);
             if (ok) return;
             // иначе — fallback на путь B
-            // / otherwise — fall back to path B
         }
 
-        // --- Путь B: прямой MDI (fallback) ---
+        // --- Путь B: прямой MDI (fallback, без culling) ---
         if ((long) size * COMMAND_STRIDE > indirectBufferSize) {
             fallbackToBaseVertex(pElementPointer, pElementCount, pBaseVertex, size,
                     DEFAULT_PRIMITIVE, indexTypeFormat, indexTypeSize);
@@ -159,6 +157,16 @@ public class EmbediumInterop {
                 0L, size, COMMAND_STRIDE);
 
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+    }
+
+    /**
+     * Вызывается в конце кадра — обновить Hi-Z пирамиду для следующего кадра.
+     * / Called at end of frame — update the Hi-Z pyramid for the next frame.
+     */
+    public static void endFrame() {
+        if (InteropComputeCuller.isInitialized()) {
+            InteropComputeCuller.endFrameUpdateHiZ();
+        }
     }
 
     /**

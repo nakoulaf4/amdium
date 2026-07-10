@@ -33,7 +33,11 @@ public abstract class VertexBufferMixin {
 
             ByteBuffer vertexData = data.vertexBuffer();
             if (vertexData == null || !vertexData.hasRemaining()) return;
-            int vertexCount = vertexData.remaining() / 32; // BLOCK stride = 32 bytes / BLOCK stride = 32 байта
+            // FIX #2: DefaultVertexFormat.BLOCK в 1.20.1 = 36 bytes (с UV1 Overlay).
+            // Должно совпадать с AmdiumVertexPool.VERTEX_STRIDE.
+            // DefaultVertexFormat.BLOCK in 1.20.1 = 36 bytes (incl. UV1 Overlay).
+            // Must match AmdiumVertexPool.VERTEX_STRIDE.
+            int vertexCount = vertexData.remaining() / dev.amdium.render.AmdiumVertexPool.VERTEX_STRIDE;
 
             int vanillaVboId = dev.amdium.util.ReflectionUtil.getVertexBufferId(vbo);
             if (vanillaVboId <= 0) return;

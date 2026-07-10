@@ -19,6 +19,10 @@ public class AmdiumConfig {
 
     // --- Interop compute culling (Embeddium path) ---
     public static final ForgeConfigSpec.BooleanValue ENABLE_INTEROP_COMPUTE_CULLING;
+    // v2.2: per-command culling sub-options
+    public static final ForgeConfigSpec.BooleanValue ENABLE_INTEROP_FRUSTUM;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_INTEROP_FOG;
+    public static final ForgeConfigSpec.BooleanValue ENABLE_HIZ_OCCLUSION;
 
     // --- Persistent Mapping ---
     public static final ForgeConfigSpec.BooleanValue ENABLE_PERSISTENT_MAPPING;
@@ -71,12 +75,32 @@ public class AmdiumConfig {
         builder.comment("Настройки interop-куллинга (при установленном Embeddium/Rubidium)").push("interop");
         ENABLE_INTEROP_COMPUTE_CULLING = builder
                 .comment("GPU-compute куллинг в interop-режиме с Embeddium.",
-                         "Compute-шейдер куллит регион (frustum + fog) и компактирует draw-команды на GPU;",
-                         "glMultiDrawElementsIndirectCount читает count с GPU — нуль readback (Nvidium-style).",
+                         "v2.2: per-command culling (frustum + fog + Hi-Z occlusion), zero readback.",
                          "Требует OpenGL 4.3 (compute) + ARB_indirect_parameters.",
                          "Если выключено или GPU не поддерживает — используется прямой MDI-путь",
                          "(glMultiDrawElementsIndirect с CPU-provided count).")
                 .define("enableInteropComputeCulling", true);
+
+        ENABLE_INTEROP_FRUSTUM = builder
+                .comment("Включить per-command frustum culling на GPU (поверх CPU culling Embeddium).",
+                         "Дублирует Embedium frustum на GPU, но позволяет zero-readback pipeline.",
+                         "Если выключено — frustum test пропускается (только fog + Hi-Z).")
+                .define("enableInteropFrustum", true);
+
+        ENABLE_INTEROP_FOG = builder
+                .comment("Включить per-command fog-distance culling на GPU.",
+                         "Секции дальше fog end полностью отсекаются на GPU без CPU работы.",
+                         "Особенно полезно ночью, в дождь или с плотным туманом.")
+                .define("enableInteropFog", true);
+
+        ENABLE_HIZ_OCCLUSION = builder
+                .comment("Включить Hi-Z GPU occlusion culling (киллер-фича v2.2).",
+                         "Строит depth pyramid из предыдущего кадра, каждой видимой команде",
+                         "проверяет AABB против пирамиды → отсекает секции заслонённые зданиями/горами.",
+                         "1-frame latency (как у Nvidium). Требует OpenGL 4.3 (image load/store).",
+                         "ЭТО даёт основной прирост FPS поверх Embedium.",
+                         "Если выключено — только frustum + fog, occlusion не делается.")
+                .define("enableHiZOcclusion", true);
         builder.pop();
 
         builder.comment("Настройки persistent mapped buffers (требует OpenGL 4.4)").push("buffers");
