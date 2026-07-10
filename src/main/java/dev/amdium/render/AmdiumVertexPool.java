@@ -65,9 +65,30 @@ public class AmdiumVertexPool {
      */
     public static final int MAX_VERTS_PER_CHUNK = 32768;
 
-    /** Vertex stride в байтах (vanilla DefaultVertexFormat.BLOCK: pos+color+uv+uv1+normal).
-     *  Vertex stride in bytes (vanilla DefaultVertexFormat.BLOCK: pos+color+uv+uv1+normal). */
-    public static final int VERTEX_STRIDE = 32;
+    // ─────────────────────────────────────────────────────────────────────────────
+    // FIX #2: VERTEX_STRIDE.
+    // Vanilla DefaultVertexFormat.BLOCK в Minecraft 1.20.1 содержит ШЕСТЬ элементов:
+    //   Position (3f)        = 12 bytes
+    //   Color    (4ub)       =  4 bytes
+    //   UV0      (2f)        =  8 bytes  ← block atlas UV
+    //   UV1      (2s)        =  4 bytes  ← Overlay (entity hurt flash, etc.)
+    //   UV2      (2s)        =  4 bytes  ← Lightmap UV
+    //   Normal   (3b + pad)  =  4 bytes
+    //   ─────────────────────────────────
+    //   TOTAL                  36 bytes
+    //
+    // Прежний код использовал 32 — это размер БЕЗ UV1 (Overlay). В результате:
+    //   - vertexCount вычислялся неправильно (remaining / 32 вместо / 36),
+    //   - атрибуты в VAO читались со смещениями, не совпадающими с реальным layout,
+    //   - GPU получал мусор для lightmap/normal уже на первых вершинах.
+    //
+    // После исправления Fix #1 чанки наконец-то стали попадать в пул — и этот баг
+    // проявился бы сразу как чёрные/мусорные чанки. Меняем stride на 36 и
+    // добавляем UV1 в setupVertexAttributes.
+    // ─────────────────────────────────────────────────────────────────────────────
+    /** Vertex stride в байтах — vanilla DefaultVertexFormat.BLOCK в 1.20.1 = 36 bytes.
+     *  Vertex stride in bytes — vanilla DefaultVertexFormat.BLOCK in 1.20.1 = 36 bytes. */
+    public static final int VERTEX_STRIDE = 36;
 
     /** Размер slot'а в байтах. / Slot size in bytes. */
     public static final long SLOT_BYTES = (long) MAX_VERTS_PER_CHUNK * VERTEX_STRIDE;
@@ -172,13 +193,14 @@ public class AmdiumVertexPool {
     }
 
     /**
-     * Настройка атрибутов — DefaultVertexFormat.BLOCK (vanilla).
-     * Attribute setup — DefaultVertexFormat.BLOCK (vanilla).
-     *   location 0: pos (3 floats)
-     *   location 1: color (4 ubytes, normalized)
-     *   location 2: uv0  (2 floats) — block atlas UV
-     *   location 3: uv1  (2 shorts) — lightmap UV
-     *   location 4: normal (4 bytes, normalized) — 3 bytes normal + 1 padding
+     * Настройка атрибутов — DefaultVertexFormat.BLOCK (vanilla 1.20.1, stride = 36 bytes).
+     * Attribute setup — DefaultVertexFormat.BLOCK (vanilla 1.20.1, stride = 36 bytes).
+     *   location 0: Position (3 floats)            — offset  0
+     *   location 1: Color    (4 ubytes, normalized) — offset 12
+     *   location 2: UV0      (2 floats) — atlas     — offset 16
+     *   location 3: UV1      (2 shorts) — overlay   — offset 24
+     *   location 4: UV2      (2 shorts) — lightmap  — offset 28
+     *   location 5: Normal   (3b + pad, normalized) — offset 32
      */
     private void setupVertexAttributes() {
         org.lwjgl.opengl.GL20.glVertexAttribPointer(0, 3, GL15.GL_FLOAT, false, VERTEX_STRIDE, 0L);
@@ -187,10 +209,15 @@ public class AmdiumVertexPool {
         org.lwjgl.opengl.GL20.glEnableVertexAttribArray(1);
         org.lwjgl.opengl.GL20.glVertexAttribPointer(2, 2, GL15.GL_FLOAT, false, VERTEX_STRIDE, 16L);
         org.lwjgl.opengl.GL20.glEnableVertexAttribArray(2);
+        // FIX #2: UV1 (Overlay) — пропущен в прежней версии.
         org.lwjgl.opengl.GL20.glVertexAttribPointer(3, 2, GL15.GL_SHORT, false, VERTEX_STRIDE, 24L);
         org.lwjgl.opengl.GL20.glEnableVertexAttribArray(3);
-        org.lwjgl.opengl.GL20.glVertexAttribPointer(4, 4, GL15.GL_BYTE, true, VERTEX_STRIDE, 28L);
+        // FIX #2: UV2 (Lightmap) — сдвинут с 24 на 28.
+        org.lwjgl.opengl.GL20.glVertexAttribPointer(4, 2, GL15.GL_SHORT, false, VERTEX_STRIDE, 28L);
         org.lwjgl.opengl.GL20.glEnableVertexAttribArray(4);
+        // FIX #2: Normal — сдвинут с 28 на 32.
+        org.lwjgl.opengl.GL20.glVertexAttribPointer(5, 4, GL15.GL_BYTE, true, VERTEX_STRIDE, 32L);
+        org.lwjgl.opengl.GL20.glEnableVertexAttribArray(5);
     }
 
     /**

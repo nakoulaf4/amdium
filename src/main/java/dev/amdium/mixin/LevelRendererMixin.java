@@ -7,11 +7,13 @@ import dev.amdium.config.AmdiumConfig;
 import dev.amdium.render.AmdiumRenderer;
 import dev.amdium.render.EmbediumInterop;
 import net.minecraft.client.Camera;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.texture.TextureAtlas;
+import org.lwjgl.opengl.GL11;
 import org.joml.Matrix4f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -40,10 +42,20 @@ public abstract class LevelRendererMixin {
 
     // Кэш кадра / Per-frame cache
     private final float[] amdium$projView = new float[16];
+    private final float[] amdium$view       = new float[16];   // v2.2: view matrix alone (for Hi-Z)
+    private final float[] amdium$projection = new float[16];   // v2.2: projection matrix alone
     private final float[] amdium$frustum  = new float[24];
     private float amdium$camX, amdium$camY, amdium$camZ;
 
     // Atlas dimensions (для UV normalize в шейдере) / Atlas dimensions (for UV normalization in the shader)
+    // FIX #5: значения обновляются каждый кадр из реального block atlas.
+    // Прежний код хранил 256×256 по умолчанию и НИКОГДА их не обновлял —
+    // getAtlas() вызывался, но результат не сохранялся. В итоге u_TextureScale
+    // всегда был 1/256, и UV-координаты сэмплили неправильные тексели атласа.
+    // / FIX #5: values are refreshed every frame from the real block atlas.
+    // Previously 256×256 was stored by default and NEVER updated — getAtlas()
+    // was called but its result was discarded. So u_TextureScale was always
+    // 1/256, sampling wrong texels from the atlas.
     private int amdium$atlasWidth = 256;
     private int amdium$atlasHeight = 256;
 
@@ -74,22 +86,53 @@ public abstract class LevelRendererMixin {
         Matrix4f view = new Matrix4f(poseStack.last().pose());
         Matrix4f pv   = new Matrix4f(projectionMatrix).mul(view);
         pv.get(amdium$projView);
+        view.get(amdium$view);             // v2.2
+        projectionMatrix.get(amdium$projection);  // v2.2
 
         amdium$extractFrustumPlanes(pv);
 
-        // В interop-режиме: пробрасываем projView + camera в EmbediumInterop,
-        // чтобы InteropComputeCuller имел frustum + camera для GPU-culling.
-        // / In interop mode: forward projView + camera to EmbediumInterop,
-        // so InteropComputeCuller has frustum + camera for GPU culling.
+        // В interop-режиме: пробрасываем projView + view + projection + camera
+        // в EmbediumInterop, чтобы InteropComputeCuller v2.2 имел всё необходимое
+        // для per-command + Hi-Z occlusion culling.
+        // / In interop mode: forward projView + view + projection + camera to
+        // EmbediumInterop, so the v2.2 InteropComputeCuller has everything needed
+        // for per-command + Hi-Z occlusion culling.
         if (Amdium.embediumInteropActive) {
             float[] fogColor = RenderSystem.getShaderFogColor();
             if (fogColor == null) fogColor = new float[]{1f, 1f, 1f, 1f};
             float fogStart = RenderSystem.getShaderFogStart();
             float fogEnd   = RenderSystem.getShaderFogEnd();
-            EmbediumInterop.setFrameData(amdium$projView,
+            EmbediumInterop.setFrameData(amdium$projView, amdium$view, amdium$projection,
                     amdium$camX, amdium$camY, amdium$camZ,
                     fogStart, fogEnd);
         }
+    }
+
+    /**
+     * TAIL renderLevel: обновляем Hi-Z пирамиду для следующего кадра (v2.2).
+     * / TAIL renderLevel: update the Hi-Z pyramid for the next frame (v2.2).
+     *
+     * Hi-Z использует depth из PREДЫДУЩЕГО кадра для culling текущего —
+     * стандартный подход с 1-frame latency (как у Nvidium).
+     * / Hi-Z uses depth from the PREVIOUS frame to cull the current one —
+     * the standard 1-frame-latency approach (like Nvidium).
+     */
+    @Inject(method = "renderLevel", at = @At("RETURN"))
+    private void amdium$onRenderLevelTail(
+            PoseStack poseStack,
+            float partialTick,
+            long finishNanoTime,
+            boolean renderBlockOutline,
+            Camera camera,
+            GameRenderer gameRenderer,
+            LightTexture lightTexture,
+            Matrix4f projectionMatrix,
+            CallbackInfo ci
+    ) {
+        if (!Amdium.embediumInteropActive) return;
+        // Обновляем Hi-Z пирамиду — она будет использована в следующем кадре.
+        // / Update the Hi-Z pyramid — it will be used in the next frame.
+        EmbediumInterop.endFrame();
     }
 
     /**
@@ -113,10 +156,27 @@ public abstract class LevelRendererMixin {
 
         renderer.beginFrame();
 
+        // FIX #5: обновляем размеры block atlas из реального texture atlas.
+        // В 1.20.1 атлас может быть любого размера (по умолчанию 256×256, но с
+        // ресурс-паками или модами на новые блоки — 512×512, 1024×1024 и т.д.).
+        // / Refresh block-atlas dimensions from the real texture atlas.
+        // In 1.20.1 the atlas can be any size (256×256 by default, but resource
+        // packs or new-block mods may use 512×512, 1024×1024, etc.).
         try {
-            net.minecraft.client.Minecraft.getInstance().getModelManager()
+            // TextureAtlas.getWidth()/getHeight() НЕ публичные в 1.20.1.
+            // Получаем размеры через OpenGL glGetTexLevelParameteri.
+            // / TextureAtlas.getWidth()/getHeight() are NOT public in 1.20.1.
+            // Get dimensions via OpenGL glGetTexLevelParameteri.
+            TextureAtlas atlas = Minecraft.getInstance().getModelManager()
                     .getAtlas(TextureAtlas.LOCATION_BLOCKS);
-        } catch (Exception ignored) {}
+            int texId = atlas.getId();
+            RenderSystem.setShaderTexture(0, texId);
+            amdium$atlasWidth  = GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_WIDTH);
+            amdium$atlasHeight = GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_HEIGHT);
+        } catch (Throwable ignored) {
+            // Если что-то пошло не так — оставляем предыдущее значение (256×256).
+            // / If anything goes wrong — keep previous value (256×256).
+        }
     }
 
     /**

@@ -65,7 +65,12 @@ repositories {
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
-    // Annotation processor: генерирует refmap.json чтобы mixin нашёл методы в обфусцированном jar
+    // Mixin AP — нужен для генерации amdium.refmap.json при компиляции.
+    // Без него рантайм Mixin не может найти обфусцированные имена
+    // (например, поле "level" → "f_109403_" в SRG).
+    // / Mixin AP — needed to generate amdium.refmap.json during compilation.
+    // Without it, runtime Mixin cannot find obfuscated names
+    // (e.g. field "level" → "f_109403_" in SRG).
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
     //EMBEDDIUM
     compileOnly fg.deobf("maven.modrinth:embeddium:0.3.31+mc1.20.1")

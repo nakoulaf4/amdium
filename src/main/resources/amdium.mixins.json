@@ -12,7 +12,10 @@
     "RenderChunkMixin",
     "VertexBufferMixin",
     "EmbeddiumDrawCommandListMixin",
-    "ChunkShaderInterfaceMixin"
+    "ChunkShaderInterfaceMixin",
+    "RenderSectionMixin",
+    "SectionRenderDataStorageMixin",
+    "RenderRegionMixin"
   ],
   "injectors": {
     "defaultRequire": 0
