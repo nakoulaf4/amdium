@@ -1,0 +1,23 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.amdium.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "amdium.refmap.json",
+  "plugin": "dev.amdium.mixin.AmdiumMixinPlugin",
+  "mixins": [],
+  "client": [
+    "MinecraftMixin",
+    "LevelRendererMixin",
+    "RenderChunkMixin",
+    "VertexBufferMixin",
+    "EmbeddiumDrawCommandListMixin",
+    "ChunkShaderInterfaceMixin",
+    "RenderSectionMixin",
+    "SectionRenderDataStorageMixin",
+    "RenderRegionMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}
