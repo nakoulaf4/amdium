@@ -3,6 +3,8 @@ package dev.amdium.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumBenchmark;
+import dev.amdium.benchmark.AmdiumGpuTimer;
 import dev.amdium.config.AmdiumConfig;
 import dev.amdium.render.AmdiumRenderer;
 import dev.amdium.render.EmbediumInterop;
@@ -58,6 +60,7 @@ public abstract class LevelRendererMixin {
     // 1/256, sampling wrong texels from the atlas.
     private int amdium$atlasWidth = 256;
     private int amdium$atlasHeight = 256;
+    private AmdiumGpuTimer.Scope amdium$frameGpuScope = null;
 
     @Inject(method = "renderLevel", at = @At("HEAD"))
     private void amdium$onRenderLevelHead(
@@ -71,6 +74,9 @@ public abstract class LevelRendererMixin {
             Matrix4f projectionMatrix,
             CallbackInfo ci
     ) {
+        AmdiumBenchmark.onRenderLevelStart();
+        amdium$frameGpuScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.FRAME);
+
         // Захват кадровых данных нужен в ОБОИХ режимах:
         // - vanilla path: для AmdiumRenderer.drawLayer
         // - interop path: для InteropComputeCuller (frustum + camera + fog)
@@ -129,10 +135,14 @@ public abstract class LevelRendererMixin {
             Matrix4f projectionMatrix,
             CallbackInfo ci
     ) {
-        if (!Amdium.embediumInteropActive) return;
-        // Обновляем Hi-Z пирамиду — она будет использована в следующем кадре.
-        // / Update the Hi-Z pyramid — it will be used in the next frame.
-        EmbediumInterop.endFrame();
+        if (Amdium.embediumInteropActive) {
+            // Обновляем Hi-Z пирамиду — она будет использована в следующем кадре.
+            // / Update the Hi-Z pyramid — it will be used in the next frame.
+            EmbediumInterop.endFrame();
+        }
+        AmdiumGpuTimer.end(amdium$frameGpuScope);
+        amdium$frameGpuScope = null;
+        AmdiumBenchmark.onRenderLevelEnd();
     }
 
     /**
@@ -149,6 +159,26 @@ public abstract class LevelRendererMixin {
             Matrix4f projectionMatrix,
             CallbackInfo ci
     ) {
+        if (Amdium.embediumInteropActive) {
+            amdium$camX = (float) camX;
+            amdium$camY = (float) camY;
+            amdium$camZ = (float) camZ;
+
+            Matrix4f view = new Matrix4f(poseStack.last().pose());
+            Matrix4f pv = new Matrix4f(projectionMatrix).mul(view);
+            pv.get(amdium$projView);
+            view.get(amdium$view);
+            projectionMatrix.get(amdium$projection);
+
+            float[] fogColor = RenderSystem.getShaderFogColor();
+            if (fogColor == null) fogColor = new float[]{1f, 1f, 1f, 1f};
+            float fogStart = RenderSystem.getShaderFogStart();
+            float fogEnd = RenderSystem.getShaderFogEnd();
+            EmbediumInterop.setFrameData(amdium$projView, amdium$view, amdium$projection,
+                    amdium$camX, amdium$camY, amdium$camZ,
+                    fogStart, fogEnd);
+        }
+
         if (!Amdium.active) return; // interop-режим не использует beginFrame
 
         AmdiumRenderer renderer = AmdiumRenderer.INSTANCE;

@@ -72,13 +72,27 @@ public class SectionRenderDataStorageMixin {
         if (!Amdium.embediumInteropActive) return;
 
         SectionRenderDataStorage self = (SectionRenderDataStorage) (Object) this;
+        RenderRegion parent = SectionStorageBridge.getParentRegion(self);
+        if (parent == null) return;
+
+        int rChunkX = parent.getChunkX();
+        int rChunkY = parent.getChunkY();
+        int rChunkZ = parent.getChunkZ();
+        int chunkX = rChunkX + LocalSectionIndex.unpackX(localSectionIndex);
+        int chunkY = rChunkY + LocalSectionIndex.unpackY(localSectionIndex);
+        int chunkZ = rChunkZ + LocalSectionIndex.unpackZ(localSectionIndex);
+
+        float originX = (float) (chunkX << 4);
+        float originY = (float) (chunkY << 4);
+        float originZ = (float) (chunkZ << 4);
+
         long pMeshData = self.getDataPointer(localSectionIndex);
         int sliceMask = SectionRenderDataUnsafe.getSliceMask(pMeshData);
 
         for (int facing = 0; facing < ModelQuadFacing.COUNT; facing++) {
             if ((sliceMask & (1 << facing)) != 0) {
                 int bv = SectionRenderDataUnsafe.getVertexOffset(pMeshData, facing);
-                PerCommandMetadata.remove(bv);
+                PerCommandMetadata.remove(bv, originX, originY, originZ);
             }
         }
     }

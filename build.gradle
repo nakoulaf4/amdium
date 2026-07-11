@@ -26,6 +26,33 @@ minecraft {
             workingDirectory project.file('run')
             property 'forge.logging.markers', 'REGISTRIES'
             property 'forge.logging.console.level', 'debug'
+            [
+                    'amdium.benchmark.enabled',
+                    'amdium.benchmark.warmupSeconds',
+                    'amdium.benchmark.durationSeconds',
+                    'amdium.benchmark.output',
+                    'amdium.benchmark.quitOnComplete',
+                    'amdium.benchmark.gpuTimers',
+                    'amdium.benchmark.gpuPassTimers',
+                    'amdium.benchmark.profile',
+                    'amdium.benchmark.label',
+                    'amdium.benchmark.phases'
+            ].each { benchmarkProperty ->
+                def benchmarkValue = providers.gradleProperty(benchmarkProperty).orNull
+                if (benchmarkValue == null) {
+                    benchmarkValue = System.getProperty(benchmarkProperty)
+                }
+                if (benchmarkValue != null) {
+                    property benchmarkProperty, benchmarkValue
+                }
+            }
+            def quickPlaySingleplayer = providers.gradleProperty('amdium.benchmark.worldName').orNull
+            if (quickPlaySingleplayer == null) {
+                quickPlaySingleplayer = System.getProperty('amdium.benchmark.worldName')
+            }
+            if (quickPlaySingleplayer != null && !quickPlaySingleplayer.isBlank()) {
+                args '--quickPlaySingleplayer', quickPlaySingleplayer
+            }
             mods {
                 "${mod_id}" {
                     source sourceSets.main

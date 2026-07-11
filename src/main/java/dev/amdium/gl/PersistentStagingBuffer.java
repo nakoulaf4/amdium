@@ -1,11 +1,12 @@
 package dev.amdium.gl;
 
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumGpuTimer;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL44;
-import org.lwjgl.opengl.GL45;
 
 import java.nio.ByteBuffer;
 
@@ -86,9 +87,13 @@ public final class PersistentStagingBuffer {
         // Если данные больше frame budget — fallback на прямой glBufferSubData
         // If the data is larger than the frame budget — fall back to direct glBufferSubData
         if (length > frameBudget) {
+            AmdiumGpuTimer.Scope uploadScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_VERTEX_UPLOAD_SUBDATA);
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, destBufferId);
             GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, destOffset, data.limit(data.position() + length));
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+            AmdiumGpuTimer.end(uploadScope);
+            AmdiumTelemetry.recordUploadBytes(length);
+            AmdiumTelemetry.recordBufferSubDataBytes(length);
             return;
         }
 
@@ -112,18 +117,14 @@ public final class PersistentStagingBuffer {
         dst.limit((int) writeOffset + length);
         dst.put(src);
 
-        // Coherent mapping → GPU видит данные сразу, но flush для надёжности
-        // Coherent mapping → the GPU sees the data immediately, but flush for reliability
-        // glFlushMappedNamedBufferRange — DSA-метод в GL45
-        // glFlushMappedNamedBufferRange — DSA method in GL45
-        // Сигнатура: GL45.glFlushMappedNamedBufferRange(int buffer, long offset, long length)
-        // Signature: GL45.glFlushMappedNamedBufferRange(int buffer, long offset, long length)
-        GL45.glFlushMappedNamedBufferRange(bufferId, writeOffset, (long) length);
-
         // GPU-side copy staging → destination / GPU-копирование staging → destination
         // Сигнатура: GL45.glCopyNamedBufferSubData(int read, int write, long readOff, long writeOff, long size)
         // Signature: GL45.glCopyNamedBufferSubData(int read, int write, long readOff, long writeOff, long size)
-        GL45.glCopyNamedBufferSubData(bufferId, destBufferId, writeOffset, destOffset, (long) length);
+        AmdiumGpuTimer.Scope copyScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_VERTEX_UPLOAD_COPY);
+        org.lwjgl.opengl.GL45.glCopyNamedBufferSubData(bufferId, destBufferId, writeOffset, destOffset, (long) length);
+        AmdiumGpuTimer.end(copyScope);
+        AmdiumTelemetry.recordUploadBytes(length);
+        AmdiumTelemetry.recordPersistentCopyBytes(length);
 
         writeOffset += length;
     }

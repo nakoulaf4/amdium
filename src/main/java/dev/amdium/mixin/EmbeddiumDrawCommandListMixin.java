@@ -51,17 +51,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * Иначе — пропускаем, Embeddium рисует сама.
  * / Otherwise — skip, Embeddium draws itself.
  */
-// Целевой класс GlRenderDevice$ImmediateDrawCommandList — PRIVATE inner class,
+// Целевой класс GLRenderDevice$ImmediateDrawCommandList — PRIVATE inner class,
 // поэтому его нельзя ссылать напрямую в Java. Единственный вариант — строковая
 // форма targets. Mixin AP выдаёт warning "could not be fully resolved" — это
 // ожидаемо и безопасно: AP не видит приватный inner class на этапе компиляции,
 // но в рантайме Mixin находит класс и применяет инъекцию корректно.
-// / The target class GlRenderDevice$ImmediateDrawCommandList is a PRIVATE inner
+// / The target class GLRenderDevice$ImmediateDrawCommandList is a PRIVATE inner
 // class, so it cannot be referenced directly in Java. The string targets form
 // is the only option. The Mixin AP warning "could not be fully resolved" is
 // expected and benign: the AP cannot see the private inner class at compile
 // time, but at runtime Mixin finds the class and applies the injection correctly.
-@Mixin(targets = "me.jellysquid.mods.sodium.client.gl.device.GlRenderDevice$ImmediateDrawCommandList", remap = false)
+@Mixin(targets = "me.jellysquid.mods.sodium.client.gl.device.GLRenderDevice$ImmediateDrawCommandList", remap = false)
 public class EmbeddiumDrawCommandListMixin {
 
     /**
@@ -84,7 +84,8 @@ public class EmbeddiumDrawCommandListMixin {
     private void amdium$onMultiDrawBaseVertex(MultiDrawBatch batch, GlIndexType indexType, CallbackInfo ci) {
         // Только если Amdium в interop-режиме.
         // / Only if Amdium is in interop mode.
-        if (!Amdium.embediumInteropActive || !EmbediumInterop.isInitialized()) {
+        if (!Amdium.embediumInteropActive
+                || !EmbediumInterop.shouldInterceptEmbeddiumDraws()) {
             return; // пропускаем — Embeddium рисует сама / skip — Embeddium draws itself
         }
         if (batch == null || batch.isEmpty()) {

@@ -2,6 +2,9 @@ package dev.amdium.render;
 
 import com.mojang.logging.LogUtils;
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumGpuTimer;
+import dev.amdium.benchmark.AmdiumGpuCounterTelemetry;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import dev.amdium.config.AmdiumConfig;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
@@ -62,7 +65,7 @@ public class InteropComputeCuller {
 
     // GL constants
     private static final int GL_DRAW_INDIRECT_BUFFER     = 0x8F3F;
-    private static final int GL_PARAMETER_BUFFER         = 0x8EE0;
+    private static final int GL_PARAMETER_BUFFER         = 0x80EE;
     private static final int GL_UNIFORM_BUFFER           = 0x8A11;
     private static final int GL_SHADER_STORAGE_BUFFER    = 0x90D2;
     private static final int GL_COMMAND_BARRIER_BIT      = 0x40;
@@ -101,6 +104,9 @@ public class InteropComputeCuller {
     private static int u_EnableFrustum, u_EnableFog, u_EnableHiZ;
 
     private static boolean initialized = false;
+    private static float currentRegionOffsetX = 0.0f;
+    private static float currentRegionOffsetY = 0.0f;
+    private static float currentRegionOffsetZ = 0.0f;
 
     // Singleton Hi-Z pyramid
     private static final HiZDepthPyramid hiZPyramid = new HiZDepthPyramid();
@@ -170,7 +176,7 @@ public class InteropComputeCuller {
 
         counterBufferId = GL15.glGenBuffers();
         GL15.glBindBuffer(GL_SHADER_STORAGE_BUFFER, counterBufferId);
-        GL15.glBufferData(GL_SHADER_STORAGE_BUFFER, 4, GL15.GL_DYNAMIC_DRAW);
+        GL15.glBufferData(GL_SHADER_STORAGE_BUFFER, 4L * Integer.BYTES, GL15.GL_DYNAMIC_DRAW);
         GL15.glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
         chunkInfoBufferId = GL15.glGenBuffers();
@@ -182,16 +188,23 @@ public class InteropComputeCuller {
         cpuStaging       = MemoryUtil.memAlloc((int) inputBufferSize);
         chunkInfoStaging = MemoryUtil.memAlloc((int) chunkInfoBufferSize);
 
-        // 4. Init Hi-Z pyramid.
-        if (AmdiumConfig.ENABLE_HIZ_OCCLUSION.get()) {
+        // 4. Init Hi-Z pyramid. Build-only mode lets benchmarks measure copy/mip
+        // cost without allowing the pyramid to reject terrain draw commands.
+        if (isHiZBuildEnabled()) {
             hiZPyramid.init();
             if (hiZPyramid.isInitialized()) {
-                LOGGER.info("[Amdium] Hi-Z occlusion culling включён.");
+                if (isHiZOcclusionEnabled()) {
+                    LOGGER.info("[Amdium] Hi-Z occlusion culling включён.");
+                } else {
+                    LOGGER.info("[Amdium] Hi-Z pyramid build/telemetry enabled; occlusion culling disabled.");
+                }
             } else {
                 LOGGER.warn("[Amdium] Hi-Z pyramid init failed — occlusion culling disabled.");
             }
         } else {
-            LOGGER.info("[Amdium] Hi-Z occlusion culling выключен в конфиге.");
+            LOGGER.info("[Amdium] Hi-Z occlusion culling выключен. "
+                    + "Use -Damdium.experimental.hizBuildOnly=true to measure pyramid cost, "
+                    + "or -Damdium.experimental.hizOcclusion=true for experimental terrain culling.");
         }
 
         initialized = true;
@@ -211,7 +224,9 @@ public class InteropComputeCuller {
      * compatibility with ChunkShaderInterfaceMixin.
      */
     public static void onRegionOffset(float x, float y, float z) {
-        // v2.2: no-op. Per-command AABB comes from PerCommandMetadata SSBO.
+        currentRegionOffsetX = x;
+        currentRegionOffsetY = y;
+        currentRegionOffsetZ = z;
     }
 
     public static boolean isInitialized() {
@@ -251,11 +266,24 @@ public class InteropComputeCuller {
 
         // --- 1. Build per-command chunkInfo SSBO ---
         // Для каждой записи в batch: lookup baseVertex → SectionInfo → AABB.
+        int regionOriginX = regionOrigin(Math.round(camX + currentRegionOffsetX));
+        int regionOriginY = regionOriginY(Math.round(camY + currentRegionOffsetY));
+        int regionOriginZ = regionOrigin(Math.round(camZ + currentRegionOffsetZ));
+        int directRegionOriginX = regionOrigin(Math.round(currentRegionOffsetX));
+        int directRegionOriginY = regionOriginY(Math.round(currentRegionOffsetY));
+        int directRegionOriginZ = regionOrigin(Math.round(currentRegionOffsetZ));
         chunkInfoStaging.clear();
         int capturedCount = 0;
         for (int i = 0; i < size; i++) {
             int baseVertex = MemoryUtil.memGetInt(pBaseVertex + ((long) i * 4));
-            PerCommandMetadata.SectionInfo info = PerCommandMetadata.findByBaseVertex(baseVertex);
+            PerCommandMetadata.SectionInfo info = PerCommandMetadata.findByBaseVertex(
+                    regionOriginX, regionOriginY, regionOriginZ, baseVertex);
+            if (info == null && (directRegionOriginX != regionOriginX
+                    || directRegionOriginY != regionOriginY
+                    || directRegionOriginZ != regionOriginZ)) {
+                info = PerCommandMetadata.findByBaseVertex(
+                        directRegionOriginX, directRegionOriginY, directRegionOriginZ, baseVertex);
+            }
 
             if (info != null) {
                 // 3 × vec4 = 48 байт на команду (см. структуру ChunkInfo в шейдере).
@@ -294,6 +322,7 @@ public class InteropComputeCuller {
                 chunkInfoStaging.putFloat(0f);
             }
         }
+        AmdiumTelemetry.recordInteropMetadata(size, size - capturedCount);
         chunkInfoStaging.flip();
         int chunkInfoBytes = size * CHUNK_INFO_STRIDE;
 
@@ -301,6 +330,8 @@ public class InteropComputeCuller {
         GL15.glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
                 (ByteBuffer) chunkInfoStaging.limit(chunkInfoBytes));
         GL15.glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        AmdiumTelemetry.recordUploadBytes(chunkInfoBytes);
+        AmdiumTelemetry.recordBufferSubDataBytes(chunkInfoBytes);
 
         // --- 2. Copy MultiDrawBatch → input SSBO (commands) ---
         cpuStaging.clear();
@@ -322,25 +353,29 @@ public class InteropComputeCuller {
         GL15.glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
                 (ByteBuffer) cpuStaging.limit(cmdBytes));
         GL15.glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        AmdiumTelemetry.recordUploadBytes(cmdBytes);
+        AmdiumTelemetry.recordBufferSubDataBytes(cmdBytes);
 
         // --- 3. Zero counter buffer ---
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer zero = stack.mallocInt(1);
-            zero.put(0, 0);
+            IntBuffer zero = stack.callocInt(4);
             GL15.glBindBuffer(GL_SHADER_STORAGE_BUFFER, counterBufferId);
             GL15.glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, zero);
             GL15.glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+            AmdiumTelemetry.recordUploadBytes(4L * Integer.BYTES);
+            AmdiumTelemetry.recordBufferSubDataBytes(4L * Integer.BYTES);
         }
 
         // --- 4. Bind Hi-Z pyramid on texture unit 5 ---
         boolean hiZReady = hiZPyramid.isInitialized()
-                && AmdiumConfig.ENABLE_HIZ_OCCLUSION.get()
+                && isHiZOcclusionEnabled()
                 && hiZPyramid.getTextureId() != -1;
         if (hiZReady) {
             hiZPyramid.bindAsSampler(HIZ_TEXTURE_UNIT);
         }
 
-        // --- 5. Bind program + uniforms ---
+        // --- 5. Bind compute program + uniforms ---
+        int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
         GL43.glUseProgram(programId);
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -357,20 +392,20 @@ public class InteropComputeCuller {
             GL20.glUniformMatrix4fv(u_ProjectionMatrix, false, p);
         }
         GL20.glUniform3f(u_CameraPos, camX, camY, camZ);
-        GL20.glUniform1i(u_ChunkCount, size);
+        GL30.glUniform1ui(u_ChunkCount, size);
         GL20.glUniform1f(u_FogStart, fogStart);
         GL20.glUniform1f(u_FogEnd, fogEnd);
 
         if (hiZReady) {
-            GL20.glUniform1i(u_HiZWidth,  hiZPyramid.getWidth());
-            GL20.glUniform1i(u_HiZHeight, hiZPyramid.getHeight());
-            GL20.glUniform1i(u_HiZLevels, hiZPyramid.getLevels());
-            GL20.glUniform1i(u_EnableHiZ, 1);
+            GL30.glUniform1ui(u_HiZWidth,  hiZPyramid.getWidth());
+            GL30.glUniform1ui(u_HiZHeight, hiZPyramid.getHeight());
+            GL30.glUniform1ui(u_HiZLevels, hiZPyramid.getLevels());
+            GL30.glUniform1ui(u_EnableHiZ, 1);
         } else {
-            GL20.glUniform1i(u_EnableHiZ, 0);
+            GL30.glUniform1ui(u_EnableHiZ, 0);
         }
-        GL20.glUniform1i(u_EnableFrustum, AmdiumConfig.ENABLE_INTEROP_FRUSTUM.get() ? 1 : 0);
-        GL20.glUniform1i(u_EnableFog,     AmdiumConfig.ENABLE_INTEROP_FOG.get()     ? 1 : 0);
+        GL30.glUniform1ui(u_EnableFrustum, isInteropFrustumEnabled() ? 1 : 0);
+        GL30.glUniform1ui(u_EnableFog,     isInteropFogEnabled()     ? 1 : 0);
 
         // Bind Hi-Z sampler to texture unit 5 (must match shader's layout(binding=5)).
         if (hiZReady) {
@@ -385,13 +420,16 @@ public class InteropComputeCuller {
 
         // --- 7. Dispatch ---
         int groups = (size + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        AmdiumTelemetry.recordComputeDispatch(groups, 1, 1, WORKGROUP_SIZE, size);
+        AmdiumGpuTimer.Scope computeScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.INTEROP_COMPUTE_CULL);
         GL43.glDispatchCompute(groups, 1, 1);
 
         // --- 8. Barrier: draw must see compute's writes ---
         GL42.glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT
                 | GL_TEXTURE_FETCH_BARRIER_BIT);
+        AmdiumGpuTimer.end(computeScope);
 
-        GL43.glUseProgram(0);
+        GL43.glUseProgram(previousProgram);
 
         if (hiZReady) {
             hiZPyramid.unbind(HIZ_TEXTURE_UNIT);
@@ -402,6 +440,7 @@ public class InteropComputeCuller {
         GL15.glBindBuffer(GL_PARAMETER_BUFFER, counterBufferId);
 
         // --- 10. glMultiDrawElementsIndirectCount (zero readback!) ---
+        AmdiumGpuTimer.Scope drawScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.INTEROP_MDI_DRAW);
         GL46.glMultiDrawElementsIndirectCount(
                 GL11.GL_TRIANGLES,
                 indexTypeFormat,
@@ -409,9 +448,11 @@ public class InteropComputeCuller {
                 0L,        // offset in GL_PARAMETER_BUFFER (read uint drawCount)
                 size,      // maxCount (CPU safety limit)
                 COMMAND_STRIDE);
+        AmdiumGpuTimer.end(drawScope);
 
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
         GL15.glBindBuffer(GL_PARAMETER_BUFFER, 0);
+        AmdiumGpuCounterTelemetry.captureCounter(counterBufferId, size);
 
         return true;
     }
@@ -423,8 +464,10 @@ public class InteropComputeCuller {
      * after all chunk renders.
      */
     public static void endFrameUpdateHiZ() {
-        if (initialized && hiZPyramid.isInitialized()) {
+        if (initialized && isHiZBuildEnabled() && hiZPyramid.isInitialized()) {
+            long start = System.nanoTime();
             hiZPyramid.update();
+            AmdiumTelemetry.recordHiZUpdate(System.nanoTime() - start, hiZPyramid.getTextureId() != -1);
         }
     }
 
@@ -452,5 +495,33 @@ public class InteropComputeCuller {
         if (chunkInfoBufferId != -1)  { GL15.glDeleteBuffers(chunkInfoBufferId); chunkInfoBufferId = -1; }
         hiZPyramid.destroy();
         initialized = false;
+    }
+
+    private static int regionOrigin(int blockOrigin) {
+        return Math.floorDiv(blockOrigin, 128) * 128;
+    }
+
+    private static int regionOriginY(int blockOriginY) {
+        return Math.floorDiv(blockOriginY, 64) * 64;
+    }
+
+    private static boolean isHiZOcclusionEnabled() {
+        return Boolean.getBoolean("amdium.experimental.hizOcclusion")
+                && !Boolean.getBoolean("amdium.experimental.hizBuildOnly");
+    }
+
+    private static boolean isHiZBuildEnabled() {
+        return Boolean.getBoolean("amdium.experimental.hizBuildOnly")
+                || isHiZOcclusionEnabled();
+    }
+
+    private static boolean isInteropFrustumEnabled() {
+        return AmdiumConfig.ENABLE_INTEROP_FRUSTUM.get();
+    }
+
+    private static boolean isInteropFogEnabled() {
+        return (AmdiumConfig.ENABLE_INTEROP_FOG.get()
+                || Boolean.getBoolean("amdium.experimental.forceInteropFog"))
+                && !Boolean.getBoolean("amdium.experimental.disableInteropFog");
     }
 }

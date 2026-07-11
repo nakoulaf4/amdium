@@ -1,6 +1,6 @@
 package dev.amdium.render;
 
-import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 
 /**
  * Хранилище per-section метаданных для interop-режима v2.2.
@@ -51,38 +51,53 @@ public final class PerCommandMetadata {
         }
     }
 
-    // baseVertex → SectionInfo.
-    // В одном регионе Embedium VBO содержит несколько секций, у каждой свой
-    // baseVertex (offset внутри region VBO). Это уникальный ключ.
-    // / baseVertex → SectionInfo.
-    // In one region, Embedium's VBO contains several sections, each with its own
-    // baseVertex (offset within the region VBO). This is a unique key.
-    private static final Int2ObjectOpenHashMap<SectionInfo> BY_BASE_VERTEX =
-            new Int2ObjectOpenHashMap<>(8192);
+    // region origin + baseVertex → SectionInfo.
+    // baseVertex is only unique inside an Embeddium region VBO, so a global
+    // baseVertex map aliases sections from different regions and causes
+    // incorrect culling.
+    private static final Long2ObjectOpenHashMap<SectionInfo> BY_REGION_AND_BASE_VERTEX =
+            new Long2ObjectOpenHashMap<>(8192);
 
     /** Регистрирует (или обновляет) секцию.
      *  Registers (or updates) a section. */
     public static void register(int baseVertex, long packedPos,
                                  float originX, float originY, float originZ) {
-        BY_BASE_VERTEX.put(baseVertex, new SectionInfo(packedPos, originX, originY, originZ));
+        BY_REGION_AND_BASE_VERTEX.put(key(regionOrigin(originX), regionOriginY(originY), regionOrigin(originZ), baseVertex),
+                new SectionInfo(packedPos, originX, originY, originZ));
     }
 
-    /** Находит секцию по baseVertex (из MultiDrawBatch). */
-    public static SectionInfo findByBaseVertex(int baseVertex) {
-        return BY_BASE_VERTEX.get(baseVertex);
+    /** Находит секцию по region origin + baseVertex (из MultiDrawBatch). */
+    public static SectionInfo findByBaseVertex(int regionOriginX, int regionOriginY, int regionOriginZ, int baseVertex) {
+        return BY_REGION_AND_BASE_VERTEX.get(key(regionOriginX, regionOriginY, regionOriginZ, baseVertex));
     }
 
     /** Удаляет секцию (при выгрузке чанка). */
-    public static void remove(int baseVertex) {
-        BY_BASE_VERTEX.remove(baseVertex);
+    public static void remove(int baseVertex, float originX, float originY, float originZ) {
+        BY_REGION_AND_BASE_VERTEX.remove(key(regionOrigin(originX), regionOriginY(originY), regionOrigin(originZ), baseVertex));
     }
 
     /** Полная очистка (при смене мира). */
     public static void clear() {
-        BY_BASE_VERTEX.clear();
+        BY_REGION_AND_BASE_VERTEX.clear();
     }
 
     public static int size() {
-        return BY_BASE_VERTEX.size();
+        return BY_REGION_AND_BASE_VERTEX.size();
+    }
+
+    private static int regionOrigin(float sectionOrigin) {
+        return Math.floorDiv((int) sectionOrigin, 128) * 128;
+    }
+
+    private static int regionOriginY(float sectionOriginY) {
+        return Math.floorDiv((int) sectionOriginY, 64) * 64;
+    }
+
+    private static long key(int regionOriginX, int regionOriginY, int regionOriginZ, int baseVertex) {
+        long h = Integer.toUnsignedLong(baseVertex);
+        h = (h * 0x9E3779B97F4A7C15L) ^ Integer.toUnsignedLong(regionOriginX);
+        h = (h * 0x9E3779B97F4A7C15L) ^ Integer.toUnsignedLong(regionOriginY);
+        h = (h * 0x9E3779B97F4A7C15L) ^ Integer.toUnsignedLong(regionOriginZ);
+        return h;
     }
 }

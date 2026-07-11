@@ -2,6 +2,8 @@ package dev.amdium.render;
 
 import com.mojang.logging.LogUtils;
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumGpuTimer;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
@@ -28,7 +30,7 @@ import java.nio.FloatBuffer;
  *   1. На каждом кадре Amdium копирует depth-attachment главного FBO Minecraft
  *      в текстуру pyramid (mip 0) через shader copy (fullscreen quad).
  *   2. Dispatch'ит compute-шейдер hiz_build.comp.glsl для построения mip 1, 2, …
- *      Каждый mip = MIN от 2×2 текселей предыдущего.
+ *      Каждый mip = conservative MAX от 2×2 текселей предыдущего.
  *   3. На следующем кадре culling-шейдер сэмплирует пирамиду через textureLod.
  *
  * Latency: 1 кадр (стандартный подход — Nvidium тоже так делает).
@@ -223,6 +225,7 @@ public final class HiZDepthPyramid {
             GL11.glBindTexture(GL_TEXTURE_2D, sourceDepthId);
 
             // Draw fullscreen quad — shader reads depth, outputs to R32F
+            int prevProgram = GL11.glGetInteger(org.lwjgl.opengl.GL20.GL_CURRENT_PROGRAM);
             org.lwjgl.opengl.GL20.glUseProgram(copyProgramId);
             int depthLoc = org.lwjgl.opengl.GL20.glGetUniformLocation(copyProgramId, "u_depth");
             int texelLoc = org.lwjgl.opengl.GL20.glGetUniformLocation(copyProgramId, "u_texelSize");
@@ -231,10 +234,12 @@ public final class HiZDepthPyramid {
                     1.0f / viewportWidth, 1.0f / viewportHeight);
 
             GL30.glBindVertexArray(copyVaoId);
+            AmdiumGpuTimer.Scope copyScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.HIZ_COPY_DEPTH);
             GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 6);
+            AmdiumGpuTimer.end(copyScope);
             GL30.glBindVertexArray(0);
 
-            org.lwjgl.opengl.GL20.glUseProgram(0);
+            org.lwjgl.opengl.GL20.glUseProgram(prevProgram);
 
             // Restore state
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, prevFbo);
@@ -246,6 +251,7 @@ public final class HiZDepthPyramid {
         }
 
         // 2. Построить mip-цепочку compute-шейдером.
+        int prevProgram = GL11.glGetInteger(org.lwjgl.opengl.GL20.GL_CURRENT_PROGRAM);
         GL20.glUseProgram(buildProgramId);
 
         GL42.glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
@@ -261,12 +267,15 @@ public final class HiZDepthPyramid {
 
             int groupsX = (dstW + 7) / 8;
             int groupsY = (dstH + 7) / 8;
+            AmdiumTelemetry.recordComputeDispatch(groupsX, groupsY, 1, 64, dstW * dstH);
+            AmdiumGpuTimer.Scope buildScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.HIZ_BUILD_MIPS);
             GL43.glDispatchCompute(groupsX, groupsY, 1);
 
             GL42.glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            AmdiumGpuTimer.end(buildScope);
         }
 
-        GL20.glUseProgram(0);
+        GL20.glUseProgram(prevProgram);
 
         GL42.glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
     }

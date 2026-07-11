@@ -2,6 +2,8 @@ package dev.amdium.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumGpuTimer;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import dev.amdium.config.AmdiumConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -46,6 +48,7 @@ public class AmdiumRenderer {
 
     private static final int MAX_CHUNKS = 16384;
     private static final int GL_DRAW_INDIRECT_BUFFER = 0x8F3F;
+    private static final int GL_PARAMETER_BUFFER = 0x80EE;
 
     private final AmdiumVertexPool vertexPool = new AmdiumVertexPool();
     private final MDIDrawCommandBuffer mdiBuffer = new MDIDrawCommandBuffer();
@@ -191,7 +194,9 @@ public class AmdiumRenderer {
         if (useComputeCulling) {
             // Загружаем все команды + AABB в SSBO (без culling)
             // Upload all commands + AABB into SSBO (no culling)
+            AmdiumGpuTimer.Scope uploadScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_MDI_UPLOAD);
             mdiBuffer.flushCPU();
+            AmdiumGpuTimer.end(uploadScope);
 
             // Compute shader: cull → compacted output + atomic count
             // Compute shader: куллинг → компактный output + atomic count
@@ -209,16 +214,18 @@ public class AmdiumRenderer {
             if (useIndirectCount) {
                 // IndirectCount: GPU читает count из parameter buffer (atomicCounterId)
                 // IndirectCount: GPU reads count from the parameter buffer (atomicCounterId)
-                GL15.glBindBuffer(0x8EE0, culler.getAtomicCounterId()); // GL_PARAMETER_BUFFER
+                GL15.glBindBuffer(GL_PARAMETER_BUFFER, culler.getAtomicCounterId());
                 drawMDIWithShader(projView, camX, camY, camZ, fogColor, fogStart, fogEnd,
                         atlasWidth, atlasHeight, drawCount);
-                GL15.glBindBuffer(0x8EE0, 0);
+                GL15.glBindBuffer(GL_PARAMETER_BUFFER, 0);
+                AmdiumTelemetry.recordVanillaLayer(drawCount, 0, true, true);
             } else {
                 // Fallback: draw с известным CPU count (visibleCount из readback)
                 // Fallback: draw with a known CPU count (visibleCount from readback)
                 frameChunksDrawn = visibleCount;
                 drawMDIWithShader(projView, camX, camY, camZ, fogColor, fogStart, fogEnd,
                         atlasWidth, atlasHeight, visibleCount);
+                AmdiumTelemetry.recordVanillaLayer(drawCount, visibleCount, true, false);
             }
             GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 
@@ -228,13 +235,16 @@ public class AmdiumRenderer {
             frameChunksDrawn = visible;
 
             if (useIndirectCount) {
+                AmdiumGpuTimer.Scope parameterScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_PARAMETER_UPLOAD);
                 mdiBuffer.uploadParameterCount(visible);
+                AmdiumGpuTimer.end(parameterScope);
             }
 
             GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, mdiBuffer.getIndirectBufferId());
             drawMDIWithShader(projView, camX, camY, camZ, fogColor, fogStart, fogEnd,
                     atlasWidth, atlasHeight, visible);
             GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+            AmdiumTelemetry.recordVanillaLayer(drawCount, visible, false, useIndirectCount);
         }
 
         if (AmdiumConfig.DEBUG_LOG_FRAME_STATS.get()) {
@@ -246,6 +256,7 @@ public class AmdiumRenderer {
     private void drawMDIWithShader(float[] projView, float camX, float camY, float camZ,
                                     float[] fogColor, float fogStart, float fogEnd,
                                     int atlasWidth, int atlasHeight, int drawCount) {
+        AmdiumGpuTimer.Scope drawScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_MDI_DRAW);
         GL20.glUseProgram(chunkProgramId);
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -301,6 +312,7 @@ public class AmdiumRenderer {
         Minecraft.getInstance().gameRenderer.lightTexture().turnOffLightLayer();
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         RenderSystem.bindTexture(0);
+        AmdiumGpuTimer.end(drawScope);
     }
 
     /** Загружает вершины чанк-слоя в pool. Вызывается из SectionRenderDispatcherMixin.

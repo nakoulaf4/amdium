@@ -1,6 +1,8 @@
 package dev.amdium.render;
 
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumGpuTimer;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import dev.amdium.config.AmdiumConfig;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryStack;
@@ -43,7 +45,7 @@ import java.nio.charset.StandardCharsets;
 public class AmdiumComputeCuller {
 
     private static final int GL_DRAW_INDIRECT_BUFFER = 0x8F3F;
-    private static final int GL_PARAMETER_BUFFER = 0x8EE0;
+    private static final int GL_PARAMETER_BUFFER = 0x80EE;
 
     private int computeProgramId = -1;
     private boolean ready = false;
@@ -136,7 +138,7 @@ public class AmdiumComputeCuller {
             buf.put(projView).flip();
             GL20.glUniformMatrix4fv(u_ProjViewMatrix, false, buf);
         }
-        GL20.glUniform1i(u_ChunkCount, chunkCount);
+        GL30.glUniform1ui(u_ChunkCount, chunkCount);
         GL20.glUniform3f(u_CameraPos, cameraX, cameraY, cameraZ);
         GL20.glUniform1f(u_FogStart, fogStart);
         GL20.glUniform1f(u_FogEnd, fogEnd);
@@ -154,6 +156,8 @@ public class AmdiumComputeCuller {
         // Dispatch — один thread на чанк / Dispatch — one thread per chunk
         int wg = AmdiumConfig.CULLING_WORKGROUP_SIZE.get();
         int groups = (chunkCount + wg - 1) / wg;
+        AmdiumTelemetry.recordComputeDispatch(groups, 1, 1, wg, chunkCount);
+        AmdiumGpuTimer.Scope computeScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_COMPUTE_CULL);
         GL43.glDispatchCompute(groups, 1, 1);
 
         // Барьер: compute должен закончить запись до того, как indirect draw прочитает
@@ -162,6 +166,7 @@ public class AmdiumComputeCuller {
                 GL42.GL_COMMAND_BARRIER_BIT
               | GL43.GL_SHADER_STORAGE_BARRIER_BIT
               | GL42.GL_BUFFER_UPDATE_BARRIER_BIT);
+        AmdiumGpuTimer.end(computeScope);
 
         GL20.glUseProgram(0);
 
@@ -179,9 +184,12 @@ public class AmdiumComputeCuller {
 
         // Fallback: readback count (минимальный stall — 4 байта)
         // Fallback: readback count (minimal stall — 4 bytes)
+        AmdiumTelemetry.recordCpuReadback();
+        AmdiumGpuTimer.Scope readbackScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_COUNT_READBACK);
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, atomicCounterId);
         GL15.glGetBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0, countReadback);
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        AmdiumGpuTimer.end(readbackScope);
         return countReadback.get(0);
     }
 

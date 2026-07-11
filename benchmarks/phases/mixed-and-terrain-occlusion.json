@@ -1,0 +1,15 @@
+{
+  "phases": [
+    {
+      "name": "mixed-rendering",
+      "warmupSeconds": 10,
+      "durationSeconds": 30
+    },
+    {
+      "name": "terrain-occlusion",
+      "warmupSeconds": 5,
+      "durationSeconds": 30,
+      "yawDeltaDegrees": 90
+    }
+  ]
+}

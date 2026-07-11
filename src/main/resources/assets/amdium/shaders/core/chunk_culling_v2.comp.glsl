@@ -52,11 +52,14 @@ layout(std430, binding = 2) writeonly buffer CompactedCommands {
 
 layout(std430, binding = 3) buffer AtomicCounter {
     uint drawCount;
+    uint frustumRejectedCount;
+    uint fogRejectedCount;
+    uint hiZRejectedCount;
 };
 
 // --- Hi-Z depth pyramid (texture) ---
 // Биндится на image unit 5 (см. InteropComputeCuller.bindHiZ()).
-// mip level 0 = full-res depth (R32F), более высокие mip = MIN-reduction.
+// mip level 0 = full-res depth (R32F), более высокие mip = conservative MAX-reduction.
 layout(binding = 5) uniform sampler2D u_HiZPyramid;
 
 // Параметры пирамиды: размеры mip 0.
@@ -77,6 +80,9 @@ uniform vec3 u_CameraPos;
 uniform uint u_ChunkCount;
 uniform float u_FogStart;
 uniform float u_FogEnd;
+
+const float HIZ_MAX_OCCLUSION_BOUNDS_PX = 96.0;
+const float HIZ_DEPTH_BIAS = 0.01;
 
 // --- Frustum extraction (Gribb & Hartmann) ---
 // Извлекаем 6 planes из projView (column-major JOML).
@@ -136,10 +142,10 @@ bool isWithinFogDistance(vec3 minPos, vec3 maxPos) {
 // Возвращает true если AABB НЕ заслонён (виден).
 // Алгоритм (стандартный Hi-Z):
 //   1. Проецируем 8 углов AABB в clip space, затем в NDC.
-//   2. Находим bbox в NDC: [minXY, maxXY] и minDepth (ближайшая к камере).
+//   2. Находим bbox в NDC: [minXY, maxXY] и closestDepth (ближайшая к камере).
 //   3. Выбираем mip level так, чтобы texel покрывал ~1 texel на пиксель bbox'а.
-//   4. Сэмплируем Hi-Z pyramid на выбранном mip — получаем closest occluder depth.
-//   5. Если minDepth AABB'а ДАЛЬШЕ occluder depth → заслонён → return false.
+//   4. Сэмплируем Hi-Z pyramid на выбранном mip — получаем farthest depth in region.
+//   5. Если closestDepth AABB'а ДАЛЬШЕ farthest depth → заслонён → return false.
 bool isNotOccluded(vec3 minPos, vec3 maxPos) {
     if (u_HiZLevels == 0u) return true;
 
@@ -158,7 +164,7 @@ bool isNotOccluded(vec3 minPos, vec3 maxPos) {
     // Проецируем в NDC.
     vec2 minNDC = vec2( 1e9);
     vec2 maxNDC = vec2(-1e9);
-    float minDepth = 1e9;       // ближайшая к камере (минимальное значение depth)
+    float closestDepth = 1e9;   // ближайшая к камере в OpenGL depth [0,1]
     bool anyInFront = false;
 
     for (int i = 0; i < 8; i++) {
@@ -170,7 +176,7 @@ bool isNotOccluded(vec3 minPos, vec3 maxPos) {
         vec3 ndc = clip.xyz / clip.w;
         minNDC = min(minNDC, ndc.xy);
         maxNDC = max(maxNDC, ndc.xy);
-        minDepth = min(minDepth, ndc.z);
+        closestDepth = min(closestDepth, ndc.z * 0.5 + 0.5);
         anyInFront = true;
     }
     if (!anyInFront) return false;  // весь AABB за камерой
@@ -189,17 +195,30 @@ bool isNotOccluded(vec3 minPos, vec3 maxPos) {
     // Выбираем mip: texel на этом mip ≈ размеру bbox на экране.
     // log2(max(w,h)) даёт количество удвоений от пикселя до bbox'а.
     float maxDimPx = max(size.x * float(u_HiZWidth), size.y * float(u_HiZHeight));
+    if (maxDimPx > HIZ_MAX_OCCLUSION_BOUNDS_PX) {
+        return true;
+    }
+
+    if (closestDepth < 0.0 || closestDepth > 1.0) {
+        return true;
+    }
+
     float mipF = log2(max(maxDimPx, 1.0));
     int mip = int(clamp(mipF, 0.0, float(u_HiZLevels - 1u)));
 
-    // Сэмплируем Hi-Z pyramid (MIN-reduction → ближайший occluder).
+    // Сэмплируем Hi-Z pyramid (MAX-reduction → farthest depth in covered region).
+    // Take four samples to reduce false occlusion from texel alignment at mip boundaries.
     vec2 centerUV = (minUV + maxUV) * 0.5;
-    float occluderDepth = textureLod(u_HiZPyramid, centerUV, float(mip)).r;
+    float d0 = textureLod(u_HiZPyramid, centerUV, float(mip)).r;
+    float d1 = textureLod(u_HiZPyramid, minUV, float(mip)).r;
+    float d2 = textureLod(u_HiZPyramid, vec2(maxUV.x, minUV.y), float(mip)).r;
+    float d3 = textureLod(u_HiZPyramid, maxUV, float(mip)).r;
+    float farthestDepth = max(max(d0, d1), max(d2, d3));
 
     // OpenGL depth: 0 = near, 1 = far.
-    // Если minDepth AABB'а дальше occluderDepth → AABB заслонён.
-    // Небольшой bias (0.001) против z-fighting'а на границах.
-    return minDepth <= occluderDepth + 0.001;
+    // Если ближайшая точка AABB дальше самого дальнего depth в регионе,
+    // весь AABB за уже отрисованной геометрией. Bias keeps terrain self-occlusion conservative.
+    return closestDepth <= farthestDepth + HIZ_DEPTH_BIAS;
 }
 
 // ============================================================
@@ -214,15 +233,26 @@ void main() {
     ChunkInfo chunk = chunks[idx];
     vec3 minP = chunk.aabbMin_origin.xyz;
     vec3 maxP = chunk.aabbMax_originY.xyz;
+    vec3 frustumMinP = minP - u_CameraPos;
+    vec3 frustumMaxP = maxP - u_CameraPos;
 
     // 1. Frustum test
-    if (u_EnableFrustum == 1u && !isAABBVisible(minP, maxP)) return;
+    if (u_EnableFrustum == 1u && !isAABBVisible(frustumMinP, frustumMaxP)) {
+        atomicAdd(frustumRejectedCount, 1u);
+        return;
+    }
 
     // 2. Fog-distance test
-    if (u_EnableFog == 1u && !isWithinFogDistance(minP, maxP)) return;
+    if (u_EnableFog == 1u && !isWithinFogDistance(minP, maxP)) {
+        atomicAdd(fogRejectedCount, 1u);
+        return;
+    }
 
     // 3. Hi-Z occlusion test (1-frame latency)
-    if (u_EnableHiZ == 1u && !isNotOccluded(minP, maxP)) return;
+    if (u_EnableHiZ == 1u && !isNotOccluded(minP, maxP)) {
+        atomicAdd(hiZRejectedCount, 1u);
+        return;
+    }
 
     // Видим — атомарно захватываем слот в output буфере.
     uint outIdx = atomicAdd(drawCount, 1u);

@@ -1,6 +1,7 @@
 package dev.amdium.render;
 
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import org.lwjgl.opengl.*;
 import org.lwjgl.system.MemoryUtil;
 
@@ -47,7 +48,7 @@ public class MDIDrawCommandBuffer {
 
     // GL targets / GL-таргеты
     private static final int GL_DRAW_INDIRECT_BUFFER = 0x8F3F;
-    private static final int GL_PARAMETER_BUFFER = 0x8EE0; // GL_PARAMETER_BUFFER_ARB
+    private static final int GL_PARAMETER_BUFFER = 0x80EE; // GL_PARAMETER_BUFFER_ARB
 
     private int indirectBufferId = -1;   // GL_DRAW_INDIRECT_BUFFER
     private int parameterBufferId = -1;  // для ARB_indirect_parameters (count) / for ARB_indirect_parameters (count)
@@ -165,10 +166,14 @@ public class MDIDrawCommandBuffer {
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirectBufferId);
         GL15.glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0, cpuCommandBuffer);
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+        AmdiumTelemetry.recordUploadBytes((long) pendingCommandCount * COMMAND_STRIDE);
+        AmdiumTelemetry.recordBufferSubDataBytes((long) pendingCommandCount * COMMAND_STRIDE);
 
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, chunkInfoSSBOId);
         GL15.glBufferSubData(GL43.GL_SHADER_STORAGE_BUFFER, 0, cpuAabbBuffer);
         GL15.glBindBuffer(GL43.GL_SHADER_STORAGE_BUFFER, 0);
+        AmdiumTelemetry.recordUploadBytes((long) pendingCommandCount * 32L);
+        AmdiumTelemetry.recordBufferSubDataBytes((long) pendingCommandCount * 32L);
     }
 
     /**
@@ -221,6 +226,8 @@ public class MDIDrawCommandBuffer {
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirectBufferId);
         GL15.glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0, filtered);
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+        AmdiumTelemetry.recordUploadBytes((long) visible * COMMAND_STRIDE);
+        AmdiumTelemetry.recordBufferSubDataBytes((long) visible * COMMAND_STRIDE);
 
         // Перезагружаем AABB (для indirectCount если включён)
         // Reload AABB (for indirectCount if enabled)
@@ -275,6 +282,8 @@ public class MDIDrawCommandBuffer {
         GL15.glBindBuffer(GL_PARAMETER_BUFFER, parameterBufferId);
         GL15.glBufferSubData(GL_PARAMETER_BUFFER, 0, cpuCountBuffer);
         GL15.glBindBuffer(GL_PARAMETER_BUFFER, 0);
+        AmdiumTelemetry.recordUploadBytes(4);
+        AmdiumTelemetry.recordBufferSubDataBytes(4);
     }
 
     private static boolean isVisibleAABB(float minX, float minY, float minZ,

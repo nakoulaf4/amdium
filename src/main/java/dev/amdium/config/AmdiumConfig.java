@@ -78,8 +78,10 @@ public class AmdiumConfig {
                          "v2.2: per-command culling (frustum + fog + Hi-Z occlusion), zero readback.",
                          "Требует OpenGL 4.3 (compute) + ARB_indirect_parameters.",
                          "Если выключено или GPU не поддерживает — используется прямой MDI-путь",
-                         "(glMultiDrawElementsIndirect с CPU-provided count).")
-                .define("enableInteropComputeCulling", true);
+                         "(glMultiDrawElementsIndirect с CPU-provided count).",
+                         "Disabled by default: direct MDI was 16-39% faster on the measured GPU",
+                         "when compute culling rejected less than one percent of commands.")
+                .define("enableInteropComputeCulling", false);
 
         ENABLE_INTEROP_FRUSTUM = builder
                 .comment("Включить per-command frustum culling на GPU (поверх CPU culling Embeddium).",
@@ -90,17 +92,23 @@ public class AmdiumConfig {
         ENABLE_INTEROP_FOG = builder
                 .comment("Включить per-command fog-distance culling на GPU.",
                          "Секции дальше fog end полностью отсекаются на GPU без CPU работы.",
-                         "Особенно полезно ночью, в дождь или с плотным туманом.")
-                .define("enableInteropFog", true);
+                         "Особенно полезно ночью, в дождь или с плотным туманом.",
+                         "Disabled by default: Embeddium normally limits submitted sections by distance,",
+                         "and the additional test regressed the 2.2.0 benchmark baseline.")
+                .define("enableInteropFog", false);
 
         ENABLE_HIZ_OCCLUSION = builder
-                .comment("Включить Hi-Z GPU occlusion culling (киллер-фича v2.2).",
+                .comment("Включить experimental Hi-Z GPU occlusion culling.",
                          "Строит depth pyramid из предыдущего кадра, каждой видимой команде",
                          "проверяет AABB против пирамиды → отсекает секции заслонённые зданиями/горами.",
                          "1-frame latency (как у Nvidium). Требует OpenGL 4.3 (image load/store).",
-                         "ЭТО даёт основной прирост FPS поверх Embedium.",
+                         "Experimental: correct in the 2.2.0 visual retest, but slower than no Hi-Z",
+                         "in the benchmark scene because pyramid and per-AABB test costs did not amortize.",
+                         "Use -Damdium.experimental.hizBuildOnly=true for pyramid telemetry only.",
+                         "Actual terrain occlusion culling requires",
+                         "-Damdium.experimental.hizOcclusion=true.",
                          "Если выключено — только frustum + fog, occlusion не делается.")
-                .define("enableHiZOcclusion", true);
+                .define("enableHiZOcclusion", false);
         builder.pop();
 
         builder.comment("Настройки persistent mapped buffers (требует OpenGL 4.4)").push("buffers");

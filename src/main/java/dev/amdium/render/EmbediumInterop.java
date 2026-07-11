@@ -1,6 +1,8 @@
 package dev.amdium.render;
 
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumGpuTimer;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import dev.amdium.config.AmdiumConfig;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL43;
@@ -39,6 +41,14 @@ public class EmbediumInterop {
 
     private static final int COMMAND_STRIDE = 20; // sizeof(DrawElementsIndirectCommand)
     private static final int GL_DRAW_INDIRECT_BUFFER = 0x8F3F;
+    private static final boolean ENABLE_EXPERIMENTAL_BASEVERTEX_PASSTHROUGH =
+            Boolean.getBoolean("amdium.experimental.embeddiumBaseVertexPassthrough");
+    private static final boolean ENABLE_EXPERIMENTAL_MDI =
+            Boolean.getBoolean("amdium.experimental.embeddiumMdi");
+    private static final boolean ENABLE_EXPERIMENTAL_COMPUTE_CULLING =
+            Boolean.getBoolean("amdium.experimental.embeddiumComputeCulling");
+    private static final int EXPERIMENTAL_MDI_MIN_COMMANDS = Math.max(0,
+            Integer.getInteger("amdium.experimental.embeddiumMdiMinCommands", 96));
 
     // Indirect buffer для fallback-пути B (без compute).
     private static int indirectBufferId = -1;
@@ -80,6 +90,19 @@ public class EmbediumInterop {
      * Инициализация. / Initialization.
      */
     public static void init(boolean supportsIndirectParameters) {
+        if (!shouldInterceptEmbeddiumDraws()) {
+            LOGGER.warn("[Amdium] Embeddium draw replacement is disabled. "
+                    + "Embeddium will render chunks with its original path. "
+                    + "Use -Damdium.experimental.embeddiumMdi=true only for draw-equivalence experiments.");
+            return;
+        }
+
+        if (ENABLE_EXPERIMENTAL_BASEVERTEX_PASSTHROUGH && !ENABLE_EXPERIMENTAL_MDI) {
+            LOGGER.warn("[Amdium] Experimental Embeddium BaseVertex passthrough active. "
+                    + "Amdium intercepts draws but calls Embeddium's original OpenGL draw shape.");
+            return;
+        }
+
         int maxCommands = 4096;
         indirectBufferSize = (long) maxCommands * COMMAND_STRIDE;
 
@@ -91,7 +114,8 @@ public class EmbediumInterop {
         cpuStaging = MemoryUtil.memAlloc((int) indirectBufferSize);
 
         // Initialize v2.2 compute culler.
-        boolean computeEnabled = AmdiumConfig.ENABLE_INTEROP_COMPUTE_CULLING.get();
+        boolean computeEnabled = AmdiumConfig.ENABLE_INTEROP_COMPUTE_CULLING.get()
+                && ENABLE_EXPERIMENTAL_COMPUTE_CULLING;
         boolean canCompute = Amdium.supportsCompute && Amdium.supportsIndirectParameters;
         if (computeEnabled && canCompute) {
             InteropComputeCuller.init();
@@ -113,6 +137,28 @@ public class EmbediumInterop {
                                            long pBaseVertex, int size, int indexTypeSize,
                                            int indexTypeFormat) {
         if (size <= 0) return;
+        AmdiumTelemetry.recordInteropBatch(size);
+
+        if (ENABLE_EXPERIMENTAL_BASEVERTEX_PASSTHROUGH && !ENABLE_EXPERIMENTAL_MDI) {
+            AmdiumTelemetry.recordInteropFallback(size);
+            fallbackToBaseVertex(pElementPointer, pElementCount, pBaseVertex, size,
+                    DEFAULT_PRIMITIVE, indexTypeFormat, indexTypeSize);
+            return;
+        }
+
+        if (!isInitialized()) {
+            AmdiumTelemetry.recordInteropFallback(size);
+            fallbackToBaseVertex(pElementPointer, pElementCount, pBaseVertex, size,
+                    DEFAULT_PRIMITIVE, indexTypeFormat, indexTypeSize);
+            return;
+        }
+
+        if (ENABLE_EXPERIMENTAL_MDI && size < EXPERIMENTAL_MDI_MIN_COMMANDS) {
+            AmdiumTelemetry.recordInteropFallback(size);
+            fallbackToBaseVertex(pElementPointer, pElementCount, pBaseVertex, size,
+                    DEFAULT_PRIMITIVE, indexTypeFormat, indexTypeSize);
+            return;
+        }
 
         // --- Путь A: GPU-compute culling (v2.2) ---
         if (InteropComputeCuller.isInitialized() && hasFrameData) {
@@ -122,8 +168,12 @@ public class EmbediumInterop {
                     frameProjView, frameView, frameProjection,
                     frameCamX, frameCamY, frameCamZ,
                     frameFogStart, frameFogEnd);
-            if (ok) return;
+            if (ok) {
+                AmdiumTelemetry.recordInteropComputeBatch(size);
+                return;
+            }
             // иначе — fallback на путь B
+            AmdiumTelemetry.recordInteropFallback(size);
         }
 
         // --- Путь B: прямой MDI (fallback, без culling) ---
@@ -132,6 +182,7 @@ public class EmbediumInterop {
                     DEFAULT_PRIMITIVE, indexTypeFormat, indexTypeSize);
             return;
         }
+        AmdiumTelemetry.recordInteropDirectBatch(size);
 
         cpuStaging.clear();
         for (int i = 0; i < size; i++) {
@@ -148,13 +199,19 @@ public class EmbediumInterop {
         cpuStaging.flip();
         int bytesToUpload = size * COMMAND_STRIDE;
 
+        AmdiumGpuTimer.Scope uploadScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.INTEROP_DIRECT_UPLOAD);
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirectBufferId);
         GL15.glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0, cpuStaging.limit(bytesToUpload));
+        AmdiumGpuTimer.end(uploadScope);
+        AmdiumTelemetry.recordUploadBytes(bytesToUpload);
+        AmdiumTelemetry.recordBufferSubDataBytes(bytesToUpload);
 
+        AmdiumGpuTimer.Scope drawScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.INTEROP_MDI_DRAW);
         GL43.glMultiDrawElementsIndirect(
                 DEFAULT_PRIMITIVE,
                 indexTypeFormat,
                 0L, size, COMMAND_STRIDE);
+        AmdiumGpuTimer.end(drawScope);
 
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     }
@@ -176,6 +233,7 @@ public class EmbediumInterop {
     private static void fallbackToBaseVertex(long pElementPointer, long pElementCount,
                                               long pBaseVertex, int size,
                                               int primitiveType, int indexTypeFormat, int indexTypeSize) {
+        AmdiumGpuTimer.Scope fallbackScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.INTEROP_BASEVERTEX_FALLBACK);
         GL32.nglMultiDrawElementsBaseVertex(
                 primitiveType,
                 pElementCount,
@@ -183,10 +241,19 @@ public class EmbediumInterop {
                 pElementPointer,
                 size,
                 pBaseVertex);
+        AmdiumGpuTimer.end(fallbackScope);
     }
 
     public static boolean isInitialized() {
         return indirectBufferId != -1;
+    }
+
+    public static boolean shouldReplaceEmbeddiumDraws() {
+        return ENABLE_EXPERIMENTAL_MDI;
+    }
+
+    public static boolean shouldInterceptEmbeddiumDraws() {
+        return ENABLE_EXPERIMENTAL_MDI || ENABLE_EXPERIMENTAL_BASEVERTEX_PASSTHROUGH;
     }
 
     public static void destroy() {

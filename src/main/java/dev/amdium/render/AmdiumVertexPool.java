@@ -1,6 +1,8 @@
 package dev.amdium.render;
 
 import dev.amdium.Amdium;
+import dev.amdium.benchmark.AmdiumGpuTimer;
+import dev.amdium.benchmark.AmdiumTelemetry;
 import dev.amdium.config.AmdiumConfig;
 import dev.amdium.gl.PersistentStagingBuffer;
 import org.lwjgl.opengl.GL;
@@ -259,10 +261,14 @@ public class AmdiumVertexPool {
         if (staging != null) {
             staging.upload(vboId, destOffset, vertexData, length);
         } else {
+            AmdiumGpuTimer.Scope uploadScope = AmdiumGpuTimer.begin(AmdiumGpuTimer.AMDIUM_VERTEX_UPLOAD_SUBDATA);
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vboId);
             GL15.glBufferSubData(GL15.GL_ARRAY_BUFFER, destOffset,
                     (ByteBuffer) vertexData.limit(vertexData.position() + length));
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+            AmdiumGpuTimer.end(uploadScope);
+            AmdiumTelemetry.recordUploadBytes(length);
+            AmdiumTelemetry.recordBufferSubDataBytes(length);
         }
 
         return slot;

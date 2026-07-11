@@ -76,10 +76,8 @@ public class Amdium {
         rubidiumDetected = ModList.get().isLoaded("rubidium");
         if (embediumDetected || rubidiumDetected) {
             String compat = embediumDetected ? "Embedium" : "Rubidium";
-            LOGGER.info("[Amdium] Обнаружен {}. Amdium активируется в режиме MDI-ускорителя "
-                    + "(перехватывает draw-вызовы и заменяет на Multi-Draw Indirect).", compat);
-            LOGGER.info("[Amdium] {} detected. Amdium activates in MDI-accelerator mode "
-                    + "(intercepts draw calls and replaces them with Multi-Draw Indirect).", compat);
+            LOGGER.info("[Amdium] Обнаружен {}. Amdium использует режим совместимости с Embeddium.", compat);
+            LOGGER.info("[Amdium] {} detected. Amdium uses Embeddium compatibility mode.", compat);
         } else {
             LOGGER.info("[Amdium] Мод загружен. Инициализация GPU произойдёт в FMLClientSetupEvent.");
             // / [Amdium] Mod loaded. GPU initialization will happen in FMLClientSetupEvent.
@@ -152,8 +150,11 @@ public class Amdium {
                 embediumInteropActive = true;
                 // active остаётся false — vanilla mixin'ы НЕ сработают
                 // / active stays false — vanilla mixins will NOT trigger
-                LOGGER.info("[Amdium] Embedium interop активирован. Draw-вызовы перехватываются → MDI.");
-                // / [Amdium] Embedium interop activated. Draw calls intercepted → MDI.
+                if (EmbediumInterop.shouldInterceptEmbeddiumDraws()) {
+                    LOGGER.warn("[Amdium] Experimental Embeddium draw replacement активирован.");
+                } else {
+                    LOGGER.info("[Amdium] Embeddium original chunk draw path remains active.");
+                }
             } else {
                 // === Полный vanilla path ===
                 // / === Full vanilla path ===

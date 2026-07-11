@@ -112,20 +112,24 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
         // / v2.2 FIX: added SectionRenderDataStorageMixin and RenderRegionMixin —
         // they also reference Embeddium classes (SectionRenderDataStorage, RenderRegion,
         // SectionRenderDataUnsafe, ModelQuadFacing, LocalSectionIndex).
-        if (mixinClassName.endsWith("EmbeddiumDrawCommandListMixin")
-                || mixinClassName.endsWith("ChunkShaderInterfaceMixin")
+        if (mixinClassName.endsWith("EmbeddiumDrawCommandListMixin")) {
+            return hasSodiumLikeRenderer()
+                    && (Boolean.getBoolean("amdium.experimental.embeddiumMdi")
+                    || Boolean.getBoolean("amdium.experimental.embeddiumBaseVertexPassthrough"));
+        }
+
+        if (mixinClassName.endsWith("ChunkShaderInterfaceMixin")
                 || mixinClassName.endsWith("RenderSectionMixin")
                 || mixinClassName.endsWith("SectionRenderDataStorageMixin")
                 || mixinClassName.endsWith("RenderRegionMixin")) {
-            boolean apply = hasSodiumLikeRenderer();
+            boolean apply = hasSodiumLikeRenderer()
+                    && Boolean.getBoolean("amdium.experimental.embeddiumComputeCulling");
             if (!apply) {
-                LOGGER.info("[Amdium] Пропускаю {} — Embeddium/Rubidium не обнаружен.",
+                LOGGER.info("[Amdium] Skipping {} — Embeddium compute culling is inactive.",
                         mixinClassName);
-                // / [Amdium] Skipping {} — Embeddium/Rubidium not detected.
             } else {
-                LOGGER.info("[Amdium] Применяю {} — обнаружен Embeddium/Rubidium.",
+                LOGGER.info("[Amdium] Applying {} — Embeddium compute culling is active.",
                         mixinClassName);
-                // / [Amdium] Applying {} — Embeddium/Rubidium detected.
             }
             return apply;
         }
