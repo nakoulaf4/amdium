@@ -41,7 +41,6 @@ public final class PerCommandMetadata {
             this.originY = originY;
             this.originZ = originZ;
             // AABB чанк-секции 16×16×16, начинающаяся с origin.
-            // / Chunk-section AABB 16×16×16 starting at origin.
             this.aabbMinX = originX;
             this.aabbMinY = originY;
             this.aabbMinZ = originZ;
@@ -54,7 +53,6 @@ public final class PerCommandMetadata {
     // baseVertex → SectionInfo.
     // В одном регионе Embedium VBO содержит несколько секций, у каждой свой
     // baseVertex (offset внутри region VBO). Это уникальный ключ.
-    // / baseVertex → SectionInfo.
     // In one region, Embedium's VBO contains several sections, each with its own
     // baseVertex (offset within the region VBO). This is a unique key.
     private static final Int2ObjectOpenHashMap<SectionInfo> BY_BASE_VERTEX =

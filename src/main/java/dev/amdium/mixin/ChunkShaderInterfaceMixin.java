@@ -43,7 +43,6 @@ public class ChunkShaderInterfaceMixin {
     )
     private void amdium$captureRegionOffset(float x, float y, float z, CallbackInfo ci) {
         // Пробрасываем в culler. Если culler не активен — вызов дешёвый (одно присваивание).
-        // / Forward to the culler. If the culler is not active, the call is cheap (one assignment).
         InteropComputeCuller.onRegionOffset(x, y, z);
     }
 }

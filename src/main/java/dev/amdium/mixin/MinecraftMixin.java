@@ -35,7 +35,6 @@ public abstract class MinecraftMixin {
             // v2.2: Очистка per-command метаданных и parent region мапы.
             // Перекрываем NoClassDefFoundError — если Embeddium не установлен,
             // класс SectionRenderDataStorageMixin не загружен.
-            // / v2.2: Cleanup per-command metadata and parent region map.
             // Catch NoClassDefFoundError — if Embeddium is not installed,
             // SectionRenderDataStorageMixin class is not loaded.
             PerCommandMetadata.clear();
@@ -43,12 +42,10 @@ public abstract class MinecraftMixin {
                 dev.amdium.render.SectionStorageBridge.clearParentRegions();
             } catch (NoClassDefFoundError ignored) {
                 // Embeddium не установлен — нечего чистить.
-                // / Embeddium not installed — nothing to clean.
             }
             Amdium.shutdown();
         } catch (Exception e) {
             Amdium.LOGGER.warn("[Amdium] Ошибка shutdown: {}", e.getMessage());
-            // / [Amdium] Shutdown error
         }
     }
 }

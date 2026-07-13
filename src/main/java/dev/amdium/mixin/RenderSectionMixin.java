@@ -32,7 +32,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class RenderSectionMixin {
 
     // Shadow геттеры chunk-координат (стандартные в Sodium/Embedium).
-    // / Shadow getters for chunk coordinates (standard in Sodium/Embedium).
     @Shadow public abstract int getChunkX();
     @Shadow public abstract int getChunkY();
     @Shadow public abstract int getChunkZ();
@@ -40,7 +39,6 @@ public abstract class RenderSectionMixin {
     // Shadow для получения region и baseVertex внутри region VBO.
     // RenderRegion.Manager или RenderRegion содержат информацию о выделенном
     // vertex-диапазоне для каждой секции.
-    // / Shadow for getting the region and baseVertex within the region VBO.
     // RenderRegion.Manager or RenderRegion holds the allocated vertex range
     // for each section.
     @Shadow private RenderRegion region;
@@ -69,7 +67,6 @@ public abstract class RenderSectionMixin {
 
         try {
             // Вычисляем chunk origin в world-координатах.
-            // / Compute chunk origin in world coordinates.
             int chunkX = getChunkX();
             int chunkY = getChunkY();
             int chunkZ = getChunkZ();
@@ -85,7 +82,6 @@ public abstract class RenderSectionMixin {
             // как гипотетический API. В реальной реализации это может быть
             // ((RenderRegionAccess) region).getSectionBaseVertex(this) или подобное.
             //
-            // / Get the section's baseVertex in its region VBO.
             // In Sodium/Embedium, RenderSection has a RenderSectionStatus or
             // region-allocated vertex offset. The exact path depends on the version.
             //
@@ -100,7 +96,6 @@ public abstract class RenderSectionMixin {
             }
         } catch (Throwable t) {
             // Тихо логируем — interop не должен крашить игру при ошибке захвата.
-            // / Log quietly — interop must not crash the game on capture failure.
             Amdium.LOGGER.debug("[Amdium] RenderSection capture failed: {}", t.getMessage());
         }
     }
@@ -130,7 +125,6 @@ public abstract class RenderSectionMixin {
         // Для PROTOTYPE-версии возвращаем -1 (culling отключится, fallback на
         // region-level culling из v2.1). Это безопасно.
         //
-        // / IMPORTANT: this is a STUB. The real implementation requires:
         //   - either an @Accessor mixin into RenderRegion for the private vertexOffset field
         //   - or capture via @Redirect at the moment region.upload(...) is called
         //

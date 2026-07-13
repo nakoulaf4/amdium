@@ -14,15 +14,6 @@ import org.lwjgl.opengl.GLCapabilities;
  *   - ARB_buffer_storage      → persistent mapped buffers
  *   - ARB_sparse_buffer       → отложенная аллокация большого VBO
  *   - ARB_shader_storage_buffer_object → SSBO (есть в GL 4.3)
- *
- * Detects the GPU vendor and available OpenGL extensions.
- *
- * Minimum: AMD GPU (Radeon RX 400+), OpenGL 4.3+ (MDI + compute)
- * Optional (give a large boost):
- *   - ARB_indirect_parameters → glMultiDrawElementsIndirectCount (no readback)
- *   - ARB_buffer_storage      → persistent mapped buffers
- *   - ARB_sparse_buffer       → lazy allocation of a large VBO
- *   - ARB_shader_storage_buffer_object → SSBO (present in GL 4.3)
  */
 public class GPUCapabilityDetector {
 
@@ -49,6 +40,69 @@ public class GPUCapabilityDetector {
                 || r.contains("navi") || r.contains("gfx");
     }
 
+    /**
+     * Определяет, является ли GPU интегрированным (APU / iGPU).
+     * APU делят память с ОЗУ и имеют меньше VRAM, чем дискретные карты.
+     *
+     * Известные APU-чипы AMD:
+     *   - Radeon 660M / 680M / 780M (RDNA2/3 APU)
+     *   - Vega 3/6/7/8/11 (Ryzen 2000-5000 APU)
+     *   - Radeon Graphics (Ryzen 7000 APU)
+     *   - ATI Radeon HD 3000/4000 series (старые IGP)
+     *
+     * Также детектим Intel iGPU и ARM Mali как APU-подобные (общая память).
+     */
+    public boolean isAPU() {
+        String v = vendor.toLowerCase();
+        String r = renderer.toLowerCase();
+
+        // AMD APU: Radeon 660M/680M/780M, "radeon graphics"
+        if (r.contains("radeon 660m") || r.contains("radeon 680m") || r.contains("radeon 780m")
+                || r.contains("radeon graphics") || r.contains("radeon(tm) graphics")
+                || r.contains("amd radeon graphics")) {
+            return true;
+        }
+        // Vega APU (но НЕ Vega 56/64/20 — это дискретные)
+        if (r.contains("vega")) {
+            // Дискретные Vega: "vega 56", "vega 64", "vega vii", "vega 20", "radeon vii"
+            if (r.contains("vega 56") || r.contains("vega 64")
+                    || r.contains("vega vii") || r.contains("radeon vii")
+                    || r.contains("vega 20")) {
+                return false;
+            }
+            // Остальные Vega — это APU (Ryzen 2000-5000).
+            return true;
+        }
+        // Intel iGPU — всегда APU-подобные (shared memory).
+        if (v.contains("intel")) {
+            if (r.contains("iris") || r.contains("uhd") || r.contains("hd graphics")
+                    || r.contains("intel(r)")) {
+                return true;
+            }
+        }
+        // ARM Mali / Adreno — мобильные iGPU.
+        if (v.contains("arm") || r.contains("mali") || r.contains("adreno")) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Возвращает безопасный cap для vertexPoolMB на данном GPU.
+     * APU ограничиваем 1024 MB, дискретные — config значением (до 4096).
+     */
+    public int getVertexPoolMBCap(int configValue) {
+        if (isAPU()) {
+            int capped = Math.min(configValue, 1024);
+            if (capped != configValue) {
+                Amdium.LOGGER.warn("[Amdium] APU обнаружен ({}). vertexPoolMB ограничен {} MB (config={}).",
+                        renderer, capped, configValue);
+            }
+            return capped;
+        }
+        return configValue;
+    }
+
     public String detectArchitecture() {
         String r = renderer.toLowerCase();
         if (r.contains("rx 7") || r.contains("navi 3") || r.contains("gfx11")) return "RDNA3 (RX 7000)";
@@ -60,67 +114,43 @@ public class GPUCapabilityDetector {
         return "Unknown AMD";
     }
 
-    /**
-     * Multi-Draw Indirect — основная фича. GL 4.3 / ARB_multi_draw_indirect.
-     * Multi-Draw Indirect — the main feature. GL 4.3 / ARB_multi_draw_indirect.
-     */
+    /** Multi-Draw Indirect — GL 4.3 / ARB_multi_draw_indirect. */
     public boolean supportsMDI() {
         return caps.GL_ARB_multi_draw_indirect || caps.OpenGL43;
     }
 
-    /**
-     * Compute shaders — GL 4.3 / ARB_compute_shader.
-     * Compute shaders — GL 4.3 / ARB_compute_shader.
-     */
+    /** Compute shaders — GL 4.3 / ARB_compute_shader. */
     public boolean supportsComputeShaders() {
         return caps.OpenGL43 || caps.GL_ARB_compute_shader;
     }
 
-    /**
-     * ARB_buffer_storage — persistent mapped buffers. GL 4.4.
-     * ARB_buffer_storage — persistent mapped buffers. GL 4.4.
-     */
+    /** ARB_buffer_storage — persistent mapped buffers (GL 4.4). */
     public boolean supportsPersistentMapping() {
         return caps.OpenGL44 || caps.GL_ARB_buffer_storage;
     }
 
-    /**
-     * SSBO — есть в GL 4.3.
-     * SSBO — present in GL 4.3.
-     */
+    /** SSBO — GL 4.3. */
     public boolean supportsSSBO() {
         return caps.OpenGL43 || caps.GL_ARB_shader_storage_buffer_object;
     }
 
     /**
      * ARB_indirect_parameters — glMultiDrawElementsIndirectCount.
-     * Позволяет GPU читать drawCount из parameter buffer — ноль readback!
-     * Доступно на AMD GCN4+ (RX 400+), RDNA — есть.
-     *
-     * ARB_indirect_parameters — glMultiDrawElementsIndirectCount.
-     * Lets the GPU read drawCount from the parameter buffer — zero readback!
-     * Available on AMD GCN4+ (RX 400+), present on RDNA.
+     * GPU читает drawCount из parameter buffer — ноль readback.
      */
     public boolean supportsIndirectParameters() {
         return caps.GL_ARB_indirect_parameters || caps.OpenGL46;
     }
 
-    /**
-     * ARB_sparse_buffer — отложенная аллокация большого VBO по страницам.
-     * ARB_sparse_buffer — page-based lazy allocation of a large VBO.
-     */
+    /** ARB_sparse_buffer — отложенная аллокация большого VBO по страницам. */
     public boolean supportsSparseBuffer() {
         return caps.GL_ARB_sparse_buffer;
     }
 
     /**
-     * EXT_mesh_shader — настоящий AMD-совместимый mesh shader (RDNA2+).
-     * В LWJGL 3.x поле caps.GL_EXT_mesh_shader может отсутствовать, поэтому
-     * проверяем через reflection (safe fallback = false).
-     *
-     * EXT_mesh_shader — a true AMD-compatible mesh shader (RDNA2+).
-     * In LWJGL 3.x the caps.GL_EXT_mesh_shader field may be missing, so we
-     * check via reflection (safe fallback = false).
+     * EXT_mesh_shader (RDNA2+).
+     * В LWJGL 3.x поле caps.GL_EXT_mesh_shader может отсутствовать,
+     * поэтому проверяем через reflection (safe fallback = false).
      */
     public boolean supportsEXTMeshShader() {
         try {

@@ -83,7 +83,6 @@ public class EmbeddiumDrawCommandListMixin {
     )
     private void amdium$onMultiDrawBaseVertex(MultiDrawBatch batch, GlIndexType indexType, CallbackInfo ci) {
         // Только если Amdium в interop-режиме.
-        // / Only if Amdium is in interop mode.
         if (!Amdium.embediumInteropActive || !EmbediumInterop.isInitialized()) {
             return; // пропускаем — Embeddium рисует сама / skip — Embeddium draws itself
         }
@@ -93,16 +92,13 @@ public class EmbeddiumDrawCommandListMixin {
 
         try {
             // Поля MultiDrawBatch публичные — прямой доступ, без reflection.
-            // / MultiDrawBatch fields are public — direct access, no reflection.
             int size = batch.size;
             if (size <= 0) return;
 
             // GlIndexType.getStride() возвращает размер индекса в байтах (1/2/4).
-            // / GlIndexType.getStride() returns the index size in bytes (1/2/4).
             int indexTypeSize = indexType.getStride();
 
             // Перехватываем — конвертируем в MDI.
-            // / Intercept — convert to MDI.
             EmbediumInterop.interceptMultiDraw(
                     batch.pElementPointer,
                     batch.pElementCount,
@@ -113,15 +109,12 @@ public class EmbeddiumDrawCommandListMixin {
             );
 
             // Отменяем оригинальный nglMultiDrawElementsBaseVertex.
-            // / Cancel the original nglMultiDrawElementsBaseVertex.
             ci.cancel();
 
         } catch (Throwable e) {
             // Если что-то пошло не так — fallback на Embeddium (не cancel).
-            // / If something went wrong — fallback to Embeddium (do not cancel).
             Amdium.LOGGER.warn("[Amdium] Embeddium interop error: {}. Fallback на Embeddium.",
                     e.getMessage());
-            // / [Amdium] Embeddium interop error: {}. Fallback to Embeddium.
         }
     }
 }

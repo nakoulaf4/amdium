@@ -17,22 +17,14 @@ import java.io.InputStream;
 import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
 
-/**
- * Hi-Z Depth Pyramid — для GPU occlusion culling.
- * / Hi-Z Depth Pyramid for GPU occlusion culling.
- */
 public final class HiZDepthPyramid {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    // GL константы
     private static final int GL_R32F            = 0x822E;
     private static final int GL_TEXTURE_2D      = GL11.GL_TEXTURE_2D;
     private static final int GL_TEXTURE_MIN_FILTER = GL11.GL_TEXTURE_MIN_FILTER;
     private static final int GL_TEXTURE_MAG_FILTER = GL11.GL_TEXTURE_MAG_FILTER;
-    private static final int GL_TEXTURE_BASE_LEVEL = GL12.GL_TEXTURE_BASE_LEVEL;
-    private static final int GL_TEXTURE_MAX_LEVEL  = GL12.GL_TEXTURE_MAX_LEVEL;
-    private static final int GL_NEAREST            = GL11.GL_NEAREST; // ИСПРАВЛЕНО: Добавлена константа
     private static final int GL_READ_ONLY        = 0x88B8;
     private static final int GL_WRITE_ONLY       = 0x88B9;
     private static final int GL_SHADER_IMAGE_ACCESS_BARRIER_BIT = 0x20;
@@ -43,21 +35,18 @@ public final class HiZDepthPyramid {
     private static final int BUILD_WG_X = 8;
     private static final int BUILD_WG_Y = 8;
 
-    // Состояние пирамиды.
     private int pyramidTextureId = -1;
     private int buildProgramId   = -1;
     private int buildShaderId    = -1;
 
-    // Cached uniform locations для build program.
     private int buildU_SrcWidth  = -1;
     private int buildU_SrcHeight = -1;
+    private int buildU_BuildSecondMip = -1;
 
-    // Shader copy pass (depth -> R32F)
     private int copyProgramId = -1;
     private int copyVaoId     = -1;
     private int copyFboId     = -1;
 
-    // Cached uniform locations для copy program.
     private int copyU_DepthLoc;
     private int copyU_TexelSizeLoc;
 
@@ -67,11 +56,9 @@ public final class HiZDepthPyramid {
 
     private boolean initialized = false;
 
-    /** Инициализация. / Initialization. */
     public void init() {
         try {
-            buildShaderId = compileShader(GL43.GL_COMPUTE_SHADER,
-                    "/assets/amdium/shaders/core/hiz_build.comp.glsl");
+            buildShaderId = compileShader(GL43.GL_COMPUTE_SHADER, "/assets/amdium/shaders/core/hiz_build.comp.glsl");
             buildProgramId = org.lwjgl.opengl.GL20.glCreateProgram();
             org.lwjgl.opengl.GL20.glAttachShader(buildProgramId, buildShaderId);
             org.lwjgl.opengl.GL20.glLinkProgram(buildProgramId);
@@ -84,11 +71,12 @@ public final class HiZDepthPyramid {
 
             buildU_SrcWidth  = org.lwjgl.opengl.GL20.glGetUniformLocation(buildProgramId, "u_SrcWidth");
             buildU_SrcHeight = org.lwjgl.opengl.GL20.glGetUniformLocation(buildProgramId, "u_SrcHeight");
+            buildU_BuildSecondMip = org.lwjgl.opengl.GL20.glGetUniformLocation(buildProgramId, "u_BuildSecondMip");
 
             initCopyPass();
 
             initialized = true;
-            LOGGER.info("[Amdium] Hi-Z pyramid builder готов (v2.3 lean). program={}", buildProgramId);
+            LOGGER.info("[Amdium] Hi-Z pyramid builder готов. program={}", buildProgramId);
         } catch (Exception e) {
             LOGGER.error("[Amdium] Hi-Z pyramid init failed: {}", e.getMessage(), e);
             initialized = false;
@@ -108,17 +96,8 @@ public final class HiZDepthPyramid {
         GL30.glBindVertexArray(0);
         GL15.glDeleteBuffers(vbo);
 
-        String vs = "#version 150 core\n" +
-                "in vec2 a_pos;\n" +
-                "void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }\n";
-        String fs = "#version 150 core\n" +
-                "uniform sampler2D u_depth;\n" +
-                "uniform vec2 u_texelSize;\n" +
-                "out float fragDepth;\n" +
-                "void main() {\n" +
-                "    vec2 uv = gl_FragCoord.xy * u_texelSize;\n" +
-                "    fragDepth = texture(u_depth, uv).r;\n" +
-                "}\n";
+        String vs = "#version 150 core\n" + "in vec2 a_pos;\n" + "void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }\n";
+        String fs = "#version 150 core\n" + "uniform sampler2D u_depth;\n" + "uniform vec2 u_texelSize;\n" + "out float fragDepth;\n" + "void main() {\n" + "    vec2 uv = gl_FragCoord.xy * u_texelSize;\n" + "    fragDepth = texture(u_depth, uv).r;\n" + "}\n";
 
         int vsId = compileShaderInline(org.lwjgl.opengl.GL20.GL_VERTEX_SHADER, vs);
         int fsId = compileShaderInline(org.lwjgl.opengl.GL20.GL_FRAGMENT_SHADER, fs);
@@ -126,10 +105,6 @@ public final class HiZDepthPyramid {
         org.lwjgl.opengl.GL20.glAttachShader(copyProgramId, vsId);
         org.lwjgl.opengl.GL20.glAttachShader(copyProgramId, fsId);
         org.lwjgl.opengl.GL20.glLinkProgram(copyProgramId);
-        if (org.lwjgl.opengl.GL20.glGetProgrami(copyProgramId, org.lwjgl.opengl.GL20.GL_LINK_STATUS) == GL11.GL_FALSE) {
-            String log = org.lwjgl.opengl.GL20.glGetProgramInfoLog(copyProgramId);
-            throw new RuntimeException("Hi-Z copy program link error:\n" + log);
-        }
         org.lwjgl.opengl.GL20.glDeleteShader(vsId);
         org.lwjgl.opengl.GL20.glDeleteShader(fsId);
 
@@ -139,164 +114,77 @@ public final class HiZDepthPyramid {
         copyFboId = GL30.glGenFramebuffers();
     }
 
-    public boolean isInitialized() {
-        return initialized;
-    }
-
     private void ensureSize(int width, int height) {
         if (width == currentWidth && height == currentHeight && pyramidTextureId != -1) return;
-
-        if (pyramidTextureId != -1) {
-            GL11.glDeleteTextures(pyramidTextureId);
-        }
+        if (pyramidTextureId != -1) GL11.glDeleteTextures(pyramidTextureId);
 
         int maxDim = Math.max(width, height);
         if (maxDim <= 0) return;
-        int levels = 32 - Integer.numberOfLeadingZeros(maxDim);
-        levels = Math.max(1, Math.min(levels, 14));
+        int levels = Math.max(1, Math.min(32 - Integer.numberOfLeadingZeros(maxDim), 14));
 
         pyramidTextureId = GL11.glGenTextures();
         GL11.glBindTexture(GL_TEXTURE_2D, pyramidTextureId);
         GL42.glTexStorage2D(GL_TEXTURE_2D, levels, GL_R32F, width, height);
-        GL11.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        GL11.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        GL11.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-        GL11.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels - 1);
+        GL11.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        GL11.glTexParameteri(GL_TEXTURE_2D, GL12.GL_TEXTURE_BASE_LEVEL, 0);
+        GL11.glTexParameteri(GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, levels - 1);
         GL11.glTexParameteri(GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL13.GL_CLAMP_TO_EDGE);
         GL11.glTexParameteri(GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL13.GL_CLAMP_TO_EDGE);
         GL11.glBindTexture(GL_TEXTURE_2D, 0);
 
-        currentWidth  = width;
-        currentHeight = height;
-        currentLevels = levels;
-
-        LOGGER.info("[Amdium] Hi-Z pyramid: {}x{}, {} levels (lean build)", width, height, levels);
+        currentWidth = width; currentHeight = height; currentLevels = levels;
     }
 
     public void update() {
         if (!initialized) return;
-
         Minecraft mc = Minecraft.getInstance();
         if (mc.getMainRenderTarget() == null) return;
 
-        int viewportWidth  = mc.getWindow().getWidth();
+        int viewportWidth = mc.getWindow().getWidth();
         int viewportHeight = mc.getWindow().getHeight();
+        ensureSize(viewportWidth, viewportHeight);
 
-        try {
-            ensureSize(viewportWidth, viewportHeight);
-        } catch (Throwable t) {
-            LOGGER.warn("[Amdium] Hi-Z ensureSize failed: {}", t.getMessage());
-            return;
-        }
-
-        int sourceDepthId = getMainFboDepthTextureId(mc);
+        int sourceDepthId = mc.getMainRenderTarget().getDepthTextureId();
         if (sourceDepthId <= 0) return;
 
-        int prevFbo;
-        int prevViewportX, prevViewportY, prevViewportW, prevViewportH;
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer vp = stack.mallocInt(4);
-            GL11.glGetIntegerv(GL11.GL_VIEWPORT, vp);
-            prevViewportX = vp.get(0);
-            prevViewportY = vp.get(1);
-            prevViewportW = vp.get(2);
-            prevViewportH = vp.get(3);
-            prevFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-        }
+        int prevFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, copyFboId);
+        GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pyramidTextureId, 0);
+        GL11.glViewport(0, 0, viewportWidth, viewportHeight);
 
-        try {
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, copyFboId);
-            GL30.glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                    GL_TEXTURE_2D, pyramidTextureId, 0);
-            GL11.glViewport(0, 0, viewportWidth, viewportHeight);
-            GL11.glDrawBuffer(GL_COLOR_ATTACHMENT0);
-
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GL11.glBindTexture(GL_TEXTURE_2D, sourceDepthId);
-
-            org.lwjgl.opengl.GL20.glUseProgram(copyProgramId);
-            org.lwjgl.opengl.GL20.glUniform1i(copyU_DepthLoc, 0);
-            org.lwjgl.opengl.GL20.glUniform2f(copyU_TexelSizeLoc,
-                    1.0f / viewportWidth, 1.0f / viewportHeight);
-
-            GL30.glBindVertexArray(copyVaoId);
-            GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 6);
-
-            org.lwjgl.opengl.GL20.glUseProgram(0);
-
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, prevFbo);
-            GL11.glViewport(prevViewportX, prevViewportY, prevViewportW, prevViewportH);
-            GL11.glBindTexture(GL_TEXTURE_2D, 0);
-        } catch (Throwable t) {
-            LOGGER.warn("[Amdium] Hi-Z depth copy pass failed: {}", t.getMessage());
-            return;
-        }
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glBindTexture(GL_TEXTURE_2D, sourceDepthId);
+        org.lwjgl.opengl.GL20.glUseProgram(copyProgramId);
+        org.lwjgl.opengl.GL20.glUniform1i(copyU_DepthLoc, 0);
+        org.lwjgl.opengl.GL20.glUniform2f(copyU_TexelSizeLoc, 1.0f / viewportWidth, 1.0f / viewportHeight);
+        GL30.glBindVertexArray(copyVaoId);
+        GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 6);
+        org.lwjgl.opengl.GL20.glUseProgram(0);
+        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, prevFbo);
 
         GL20.glUseProgram(buildProgramId);
-
         GL42.glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
 
-        for (int level = 0; level < currentLevels - 1; level++) {
-            int srcW = Math.max(1, currentWidth  >> level);
+        for (int level = 0; level < currentLevels - 1; level += 2) {
+            int srcW = Math.max(1, currentWidth >> level);
             int srcH = Math.max(1, currentHeight >> level);
-            int dstW = Math.max(1, srcW >> 1);
-            int dstH = Math.max(1, srcH >> 1);
+            boolean buildSecond = (level + 2 < currentLevels);
 
-            GL42.glBindImageTexture(0, pyramidTextureId, level,     false, 0, GL_READ_ONLY,  GL_R32F);
+            GL42.glBindImageTexture(0, pyramidTextureId, level, false, 0, GL_READ_ONLY, GL_R32F);
             GL42.glBindImageTexture(1, pyramidTextureId, level + 1, false, 0, GL_WRITE_ONLY, GL_R32F);
+            if (buildSecond) GL42.glBindImageTexture(2, pyramidTextureId, level + 2, false, 0, GL_WRITE_ONLY, GL_R32F);
 
-            org.lwjgl.opengl.GL20.glUniform1i(buildU_SrcWidth,  srcW);
+            org.lwjgl.opengl.GL20.glUniform1i(buildU_SrcWidth, srcW);
             org.lwjgl.opengl.GL20.glUniform1i(buildU_SrcHeight, srcH);
+            org.lwjgl.opengl.GL20.glUniform1i(buildU_BuildSecondMip, buildSecond ? 1 : 0);
+            GL43.glDispatchCompute(( (Math.max(1, srcW >> 1)) + BUILD_WG_X - 1) / BUILD_WG_X,
+                    ( (Math.max(1, srcH >> 1)) + BUILD_WG_Y - 1) / BUILD_WG_Y, 1);
 
-            int groupsX = (dstW + BUILD_WG_X - 1) / BUILD_WG_X;
-            int groupsY = (dstH + BUILD_WG_Y - 1) / BUILD_WG_Y;
-            GL43.glDispatchCompute(groupsX, groupsY, 1);
-
-            if (level < currentLevels - 2) {
-                GL42.glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-            }
+            if (level + 2 < currentLevels - 1) GL42.glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         }
-
         GL20.glUseProgram(0);
-
         GL42.glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
-    }
-
-    public void bindAsSampler(int unit) {
-        if (!initialized || pyramidTextureId == -1) return;
-        GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
-        GL11.glBindTexture(GL_TEXTURE_2D, pyramidTextureId);
-    }
-
-    public void unbind(int unit) {
-        GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
-        GL11.glBindTexture(GL_TEXTURE_2D, 0);
-    }
-
-    public int getTextureId() { return pyramidTextureId; }
-    public int getWidth()     { return currentWidth; }
-    public int getHeight()    { return currentHeight; }
-    public int getLevels()    { return currentLevels; }
-
-    public void destroy() {
-        if (copyProgramId != -1) { org.lwjgl.opengl.GL20.glDeleteProgram(copyProgramId); copyProgramId = -1; }
-        if (copyVaoId     != -1) { GL30.glDeleteVertexArrays(copyVaoId); copyVaoId = -1; }
-        if (copyFboId     != -1) { GL30.glDeleteFramebuffers(copyFboId); copyFboId = -1; }
-        if (buildProgramId != -1) { GL20.glDeleteProgram(buildProgramId); buildProgramId = -1; }
-        if (buildShaderId  != -1) { GL20.glDeleteShader(buildShaderId);  buildShaderId  = -1; }
-        if (pyramidTextureId != -1) { GL11.glDeleteTextures(pyramidTextureId); pyramidTextureId = -1; }
-        initialized = false;
-    }
-
-    private static int getMainFboDepthTextureId(Minecraft mc) {
-        try {
-            var rt = mc.getMainRenderTarget();
-            if (rt == null) return -1;
-            return rt.getDepthTextureId();
-        } catch (Throwable t) {
-            LOGGER.warn("[Amdium] getMainFboDepthTextureId failed: {}", t.getMessage());
-            return -1;
-        }
     }
 
     private int compileShader(int type, String path) throws Exception {
@@ -304,11 +192,6 @@ public final class HiZDepthPyramid {
         int shader = GL20.glCreateShader(type);
         GL20.glShaderSource(shader, source);
         GL20.glCompileShader(shader);
-        if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == GL11.GL_FALSE) {
-            String log = GL20.glGetShaderInfoLog(shader);
-            GL20.glDeleteShader(shader);
-            throw new RuntimeException("Shader compile error (" + path + "):\n" + log);
-        }
         return shader;
     }
 
@@ -316,42 +199,80 @@ public final class HiZDepthPyramid {
         int shader = org.lwjgl.opengl.GL20.glCreateShader(type);
         org.lwjgl.opengl.GL20.glShaderSource(shader, source);
         org.lwjgl.opengl.GL20.glCompileShader(shader);
-        if (org.lwjgl.opengl.GL20.glGetShaderi(shader, org.lwjgl.opengl.GL20.GL_COMPILE_STATUS) == GL11.GL_FALSE) {
-            String log = org.lwjgl.opengl.GL20.glGetShaderInfoLog(shader);
-            org.lwjgl.opengl.GL20.glDeleteShader(shader);
-            throw new RuntimeException("Inline shader compile error:\n" + log);
-        }
         return shader;
+    }
+
+    public boolean isInitialized() {
+        return initialized;
+    }
+
+    public int getTextureId() {
+        return pyramidTextureId;
+    }
+
+    public int getWidth() {
+        return currentWidth;
+    }
+
+    public int getHeight() {
+        return currentHeight;
+    }
+
+    public int getLevels() {
+        return currentLevels;
+    }
+
+    public void bindAsSampler(int textureUnit) {
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnit);
+        GL11.glBindTexture(GL_TEXTURE_2D, pyramidTextureId);
+    }
+
+    public void unbind(int textureUnit) {
+        GL13.glActiveTexture(GL13.GL_TEXTURE0 + textureUnit);
+        GL11.glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    public void destroy() {
+        if (pyramidTextureId != -1) {
+            GL11.glDeleteTextures(pyramidTextureId);
+            pyramidTextureId = -1;
+        }
+        if (buildProgramId != -1) {
+            GL20.glDeleteProgram(buildProgramId);
+            buildProgramId = -1;
+        }
+        if (copyProgramId != -1) {
+            GL20.glDeleteProgram(copyProgramId);
+            copyProgramId = -1;
+        }
+        if (copyVaoId != -1) {
+            GL30.glDeleteVertexArrays(copyVaoId);
+            copyVaoId = -1;
+        }
+        if (copyFboId != -1) {
+            GL30.glDeleteFramebuffers(copyFboId);
+            copyFboId = -1;
+        }
+        currentWidth = 0;
+        currentHeight = 0;
+        currentLevels = 0;
+        initialized = false;
     }
 
     private String loadShaderSource(String path) throws Exception {
         try (InputStream is = HiZDepthPyramid.class.getResourceAsStream(path)) {
-            if (is == null) throw new RuntimeException("Shader not found: " + path);
             return new String(is.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 
-    // Внутренний GL20 прокси.
     private static class GL20 {
-        static final int GL_VERTEX_SHADER   = 0x8B31;
-        static final int GL_FRAGMENT_SHADER = 0x8B30;
-        static final int GL_COMPILE_STATUS  = 0x8B81;
-        static final int GL_LINK_STATUS     = 0x8B82;
-
-        static int  glCreateShader(int t)          { return org.lwjgl.opengl.GL20.glCreateShader(t); }
-        static void glShaderSource(int s, CharSequence src) { org.lwjgl.opengl.GL20.glShaderSource(s, src); }
-        static void glCompileShader(int s)         { org.lwjgl.opengl.GL20.glCompileShader(s); }
-        static int  glGetShaderi(int s, int p)     { return org.lwjgl.opengl.GL20.glGetShaderi(s, p); }
-        static String glGetShaderInfoLog(int s)    { return org.lwjgl.opengl.GL20.glGetShaderInfoLog(s); }
-        static void glDeleteShader(int s)          { org.lwjgl.opengl.GL20.glDeleteShader(s); }
-
-        static int  glCreateProgram()              { return org.lwjgl.opengl.GL20.glCreateProgram(); }
-        // ИСПРАВЛЕНО: Убран невалидный 'return' из void методов
         static void glAttachShader(int p, int s)   { org.lwjgl.opengl.GL20.glAttachShader(p, s); }
         static void glLinkProgram(int p)           { org.lwjgl.opengl.GL20.glLinkProgram(p); }
-        static int  glGetProgrami(int p, int i)    { return org.lwjgl.opengl.GL20.glGetProgrami(p, i); }
-        static String glGetProgramInfoLog(int p)   { return org.lwjgl.opengl.GL20.glGetProgramInfoLog(p); }
         static void glDeleteProgram(int p)         { org.lwjgl.opengl.GL20.glDeleteProgram(p); }
         static void glUseProgram(int p)            { org.lwjgl.opengl.GL20.glUseProgram(p); }
+        static int glCreateShader(int t)           { return org.lwjgl.opengl.GL20.glCreateShader(t); }
+        static void glShaderSource(int s, CharSequence src) { org.lwjgl.opengl.GL20.glShaderSource(s, src); }
+        static void glCompileShader(int s)         { org.lwjgl.opengl.GL20.glCompileShader(s); }
+        static int glGetShaderi(int s, int p)      { return org.lwjgl.opengl.GL20.glGetShaderi(s, p); }
     }
 }

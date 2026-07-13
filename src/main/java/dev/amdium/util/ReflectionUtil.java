@@ -10,8 +10,6 @@ public class ReflectionUtil {
         if (vboIdField == null) {
             // Перебираем все поля класса, чтобы найти нужный int ID,
             // независимо от того, какие маппинги сейчас установлены.
-            // Iterate over all fields of the class to find the desired int ID,
-            // regardless of which mappings are currently in use.
             for (Field field : VertexBuffer.class.getDeclaredFields()) {
                 if (field.getType() == int.class) {
                     field.setAccessible(true);

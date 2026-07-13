@@ -83,13 +83,11 @@ public abstract class LevelRendererMixin {
     private float amdium$camX, amdium$camY, amdium$camZ;
 
     // Atlas dimensions — кэшируются, обновляются редко.
-    // / Atlas dimensions — cached, refreshed rarely.
     private int amdium$atlasWidth = 256;
     private int amdium$atlasHeight = 256;
     private int amdium$atlasTexId = -1;
 
     // v2.3: throttle для atlas query — не чаще раза в секунду.
-    // / v2.3: throttle for the atlas query — no more than once per second.
     private long amdium$lastAtlasCheckMs = 0;
     private static final long ATLAS_CHECK_INTERVAL_MS = 1000L;
 
@@ -120,7 +118,6 @@ public abstract class LevelRendererMixin {
         amdium$extractFrustumPlanes(pv);
 
         // v2.3: beginFrame для interop ring stream.
-        // / v2.3: beginFrame for the interop ring stream.
         if (Amdium.embediumInteropActive) {
             float[] fogColor = RenderSystem.getShaderFogColor();
             if (fogColor == null) fogColor = new float[]{1f, 1f, 1f, 1f};
@@ -171,7 +168,6 @@ public abstract class LevelRendererMixin {
         renderer.beginFrame();
 
         // v2.3: обновляем размеры block atlas ТОЛЬКО раз в секунду (не каждый кадр!).
-        // / v2.3: refresh block-atlas dimensions ONLY once per second (not every frame!).
         long now = System.currentTimeMillis();
         if (now - amdium$lastAtlasCheckMs > ATLAS_CHECK_INTERVAL_MS) {
             amdium$lastAtlasCheckMs = now;
@@ -191,7 +187,6 @@ public abstract class LevelRendererMixin {
             if (texId <= 0) return;
 
             // Если ID текстуры не менялся И размеры уже валидны — пропускаем query.
-            // / If the texture ID hasn't changed AND the dimensions are already
             // valid — skip the query.
             if (texId == amdium$atlasTexId
                     && amdium$atlasWidth > 0
@@ -201,7 +196,6 @@ public abstract class LevelRendererMixin {
             amdium$atlasTexId = texId;
 
             // Сохраняем предыдущую привязку texture unit 0, делаем query, восстанавливаем.
-            // / Save the previous binding of texture unit 0, do the query, restore.
             int prevTex = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, texId);
             amdium$atlasWidth  = GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_WIDTH);
@@ -209,7 +203,6 @@ public abstract class LevelRendererMixin {
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, prevTex);
         } catch (Throwable ignored) {
             // Если что-то пошло не так — оставляем предыдущее значение.
-            // / If anything goes wrong — keep the previous value.
         }
     }
 

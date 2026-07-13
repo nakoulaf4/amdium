@@ -10,58 +10,24 @@ import org.lwjgl.system.MemoryUtil;
 import java.nio.ByteBuffer;
 
 /**
- * Перехватчик draw-вызовов Embedium. v2.3 — оптимизированный interop.
- * / Embedium draw-call interceptor. v2.3 — optimized interop.
+ * Перехватчик draw-вызовов Embedium. v2.3.3 — оптимизированный interop.
  *
- * ─────────────────────────────────────────────────────────────────────────
- * v2.3 ОПТИМИЗАЦИЯ / v2.3 OPTIMIZATION
- * ─────────────────────────────────────────────────────────────────────────
- *
- * v2.2 ПРОБЛЕМА / v2.2 PROBLEM:
- *   Fallback-путь B (без compute culling) использовал glBufferSubData на
- *   одном и том же indirectBufferId каждый кадр — без orphaning. Это
- *   вызывало implicit sync, если GPU ещё читал прошлый кадр.
- *   / The fallback path B (without compute culling) used glBufferSubData on
- *   the same indirectBufferId every frame — without orphaning. This caused
- *   implicit sync if the GPU was still reading the previous frame.
- *
- * v2.3 ИСПРАВЛЕНИЕ / v2.3 FIX:
- *   Добавлен buffer orphaning: glBufferData(size, DYNAMIC_DRAW) с NULL
- *   перед glBufferSubData. Драйвер выдаёт свежий buffer, старый живёт пока
- *   GPU его читает. Стандартный паттерн для DYNAMIC_DRAW буферов.
- *   / Added buffer orphaning: glBufferData(size, DYNAMIC_DRAW) with NULL
- *   before glBufferSubData. The driver hands out a fresh buffer; the old one
- *   lives until the GPU finishes reading it. Standard pattern for DYNAMIC_DRAW.
- *
- *   Также добавлены beginFrame()/endFrame() для RingStreamBuffer.
- *   / Added beginFrame()/endFrame() for the RingStreamBuffer.
- *
- * Пути / Paths:
- *
- *  === Путь A: GPU-compute culling (v2.3, per-command + Hi-Z) ===
- *    Делает:
- *      1. CPU строит per-command chunkInfo SSBO (baseVertex → AABB lookup).
- *      2. Compute-шейдер куллит per-command: frustum + fog + Hi-Z occlusion.
- *      3. glMultiDrawElementsIndirectCount — нуль readback.
- *
- *  === Путь B: прямой MDI (fallback, без culling) ===
- *    Если путь A недоступен — обычный glMultiDrawElementsIndirect с
- *    CPU-provided count + buffer orphaning.
+ * Пути:
+ *   Путь A: GPU-compute culling (per-command + Hi-Z) → glMultiDrawElementsIndirectCount
+ *   Путь B: прямой MDI (fallback, без culling) → glMultiDrawElementsIndirect с orphaning
  */
 public class EmbediumInterop {
 
     private static final org.slf4j.Logger LOGGER = Amdium.LOGGER;
 
-    private static final int COMMAND_STRIDE = 20; // sizeof(DrawElementsIndirectCommand)
+    private static final int COMMAND_STRIDE = 20;
     private static final int GL_DRAW_INDIRECT_BUFFER = 0x8F3F;
 
-    // Indirect buffer для fallback-пути B (без compute).
     private static int indirectBufferId = -1;
     private static long indirectBufferSize = 0;
     private static ByteBuffer cpuStaging = null;
 
-    // Кадровые данные, захваченные LevelRendererMixin для пути A.
-    // / Per-frame data captured by LevelRendererMixin for path A.
+    // Переменные кадра от LevelRendererMixin (для пути A).
     private static float[] frameProjView    = new float[16];
     private static float[] frameView        = new float[16];
     private static float[] frameProjection  = new float[16];
@@ -71,10 +37,6 @@ public class EmbediumInterop {
 
     private static final int DEFAULT_PRIMITIVE = org.lwjgl.opengl.GL11.GL_TRIANGLES;
 
-    /**
-     * Данные кадра от LevelRendererMixin (interop-режим).
-     * / Per-frame data from LevelRendererMixin (interop mode).
-     */
     public static void setFrameData(float[] projView, float[] view, float[] projection,
                                      float camX, float camY, float camZ,
                                      float fogStart, float fogEnd) {
@@ -86,19 +48,13 @@ public class EmbediumInterop {
         hasFrameData = true;
     }
 
-    /**
-     * v2.3: вызывается в HEAD renderLevel — подготавливает ring stream для кадра.
-     * / v2.3: called at HEAD renderLevel — prepares the ring stream for the frame.
-     */
+    /** Вызывается в HEAD renderLevel — подготавливает ring stream для кадра. */
     public static void beginFrame() {
         if (InteropComputeCuller.isInitialized()) {
             InteropComputeCuller.beginFrame();
         }
     }
 
-    /**
-     * Инициализация. / Initialization.
-     */
     public static void init(boolean supportsIndirectParameters) {
         int maxCommands = 4096;
         indirectBufferSize = (long) maxCommands * COMMAND_STRIDE;
@@ -110,7 +66,6 @@ public class EmbediumInterop {
 
         cpuStaging = MemoryUtil.memAlloc((int) indirectBufferSize);
 
-        // Initialize v2.3 compute culler.
         boolean computeEnabled = AmdiumConfig.ENABLE_INTEROP_COMPUTE_CULLING.get();
         boolean canCompute = Amdium.supportsCompute && Amdium.supportsIndirectParameters;
         if (computeEnabled && canCompute) {
@@ -127,14 +82,13 @@ public class EmbediumInterop {
 
     /**
      * Перехват multiDrawElementsBaseVertex из Embedium.
-     * / Intercept multiDrawElementsBaseVertex from Embedium.
      */
     public static void interceptMultiDraw(long pElementPointer, long pElementCount,
                                            long pBaseVertex, int size, int indexTypeSize,
                                            int indexTypeFormat) {
         if (size <= 0) return;
 
-        // --- Путь A: GPU-compute culling (v2.3) ---
+        // Путь A: GPU-compute culling
         if (InteropComputeCuller.isInitialized() && hasFrameData) {
             boolean ok = InteropComputeCuller.drawWithCulling(
                     pElementPointer, pElementCount, pBaseVertex,
@@ -143,10 +97,9 @@ public class EmbediumInterop {
                     frameCamX, frameCamY, frameCamZ,
                     frameFogStart, frameFogEnd);
             if (ok) return;
-            // иначе — fallback на путь B
         }
 
-        // --- Путь B: прямой MDI (fallback, без culling) ---
+        // Путь B: прямой MDI (fallback)
         if ((long) size * COMMAND_STRIDE > indirectBufferSize) {
             fallbackToBaseVertex(pElementPointer, pElementCount, pBaseVertex, size,
                     DEFAULT_PRIMITIVE, indexTypeFormat, indexTypeSize);
@@ -168,10 +121,7 @@ public class EmbediumInterop {
         cpuStaging.flip();
         int bytesToUpload = size * COMMAND_STRIDE;
 
-        // v2.3: buffer orphaning — даём драйверу выдать свежий буфер, чтобы
-        // избежать implicit sync с прошлым кадром.
-        // / v2.3: buffer orphaning — let the driver hand out a fresh buffer to
-        // avoid implicit sync with the previous frame.
+        // Buffer orphaning — избегаем implicit sync с прошлым кадром.
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirectBufferId);
         GL15.glBufferData(GL_DRAW_INDIRECT_BUFFER, indirectBufferSize, GL15.GL_DYNAMIC_DRAW);
         GL15.glBufferSubData(GL_DRAW_INDIRECT_BUFFER, 0, cpuStaging.limit(bytesToUpload));
@@ -184,20 +134,13 @@ public class EmbediumInterop {
         GL15.glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     }
 
-    /**
-     * Вызывается в конце кадра — обновить Hi-Z пирамиду для следующего кадра.
-     * / Called at end of frame — update the Hi-Z pyramid for the next frame.
-     */
+    /** Вызывается в конце кадра — обновляет Hi-Z пирамиду. */
     public static void endFrame() {
         if (InteropComputeCuller.isInitialized()) {
             InteropComputeCuller.endFrameUpdateHiZ();
         }
     }
 
-    /**
-     * Fallback на оригинальный Embedium вызов.
-     * / Fallback to the original Embedium call.
-     */
     private static void fallbackToBaseVertex(long pElementPointer, long pElementCount,
                                               long pBaseVertex, int size,
                                               int primitiveType, int indexTypeFormat, int indexTypeSize) {

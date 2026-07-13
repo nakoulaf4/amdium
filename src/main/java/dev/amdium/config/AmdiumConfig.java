@@ -19,10 +19,10 @@ public class AmdiumConfig {
 
     // --- Interop compute culling (Embeddium path) ---
     public static final ForgeConfigSpec.BooleanValue ENABLE_INTEROP_COMPUTE_CULLING;
-    // v2.2: per-command culling sub-options
     public static final ForgeConfigSpec.BooleanValue ENABLE_INTEROP_FRUSTUM;
     public static final ForgeConfigSpec.BooleanValue ENABLE_INTEROP_FOG;
     public static final ForgeConfigSpec.BooleanValue ENABLE_HIZ_OCCLUSION;
+    public static final ForgeConfigSpec.IntValue INTEROP_WORKGROUP_SIZE;
 
     // --- Persistent Mapping ---
     public static final ForgeConfigSpec.BooleanValue ENABLE_PERSISTENT_MAPPING;
@@ -33,7 +33,7 @@ public class AmdiumConfig {
     // --- Debug ---
     public static final ForgeConfigSpec.BooleanValue DEBUG_SHOW_CULLED;
     public static final ForgeConfigSpec.BooleanValue DEBUG_LOG_FRAME_STATS;
-    // полностью отменять vanilla render / fully override the vanilla render
+    // полностью отменять vanilla render
     public static final ForgeConfigSpec.BooleanValue DISABLE_VANILLA_LAYER;
 
     static {
@@ -47,9 +47,12 @@ public class AmdiumConfig {
                 .define("enableMDI", true);
         MDI_VERTEX_POOL_MB = builder
                 .comment("Размер глобального vertex pool в мегабайтах.",
-                         "32K verts на чанк × 32 байта = 1 MB на чанк.",
+                         "32K verts на чанк × 36 байт = ~1.1 MB на чанк.",
                          "512 чанков для RD 12, 1024 чанков для RD 16, 4096 для RD 32.",
-                         "Рекомендуется 512 MB для RD 12, 1024 MB для RD 16, 4096 MB для RD 32.")
+                         "Рекомендуется 512 MB для RD 12, 1024 MB для RD 16, 4096 MB для RD 32.",
+                         "для APU (Radeon 660M, Vega iGPU и т.п.) автоматически",
+                         "ограничивается 1024 MB чтобы не уронить игру по OOM — APU делит",
+                         "память с ОЗУ. Дискретные карты используют полный диапазон.")
                 .defineInRange("vertexPoolMB", 1024, 256, 4096);
         builder.pop();
 
@@ -75,7 +78,7 @@ public class AmdiumConfig {
         builder.comment("Настройки interop-куллинга (при установленном Embeddium/Rubidium)").push("interop");
         ENABLE_INTEROP_COMPUTE_CULLING = builder
                 .comment("GPU-compute куллинг в interop-режиме с Embeddium.",
-                         "v2.2: per-command culling (frustum + fog + Hi-Z occlusion), zero readback.",
+                         "per-command culling (frustum + fog + Hi-Z occlusion), zero readback.",
                          "Требует OpenGL 4.3 (compute) + ARB_indirect_parameters.",
                          "Если выключено или GPU не поддерживает — используется прямой MDI-путь",
                          "(glMultiDrawElementsIndirect с CPU-provided count).")
@@ -101,6 +104,14 @@ public class AmdiumConfig {
                          "ЭТО даёт основной прирост FPS поверх Embedium.",
                          "Если выключено — только frustum + fog, occlusion не делается.")
                 .define("enableHiZOcclusion", true);
+
+        INTEROP_WORKGROUP_SIZE = builder
+                .comment("Размер workgroup для interop compute culling shader (степень 2).",
+                         "На AMD RDNA оптимально 64 (один wavefront).",
+                         "На NVIDIA можно 32 (warp) или 64 — разница минимальна.",
+                         "Изменение требует перекомпиляции шейдера (автоматически через Config screen).",
+                         "Если новое значение не компилируется — автоматический откат к старому.")
+                .defineInRange("interopWorkgroupSize", 64, 32, 256);
         builder.pop();
 
         builder.comment("Настройки persistent mapped buffers (требует OpenGL 4.4)").push("buffers");
@@ -109,7 +120,12 @@ public class AmdiumConfig {
                 .define("enablePersistentMapping", true);
         FRAMES_IN_FLIGHT = builder
                 .comment("Количество кадров в очереди GPU (frame pacing).",
-                         "3 = triple buffering. Больше = плавнее, но больше VRAM.")
+                         "2 = двойная буферизация — минимальная задержка (input lag),",
+                         "    но CPU может ждать GPU в тяжёлых кадрах.",
+                         "3 = тройная буферизация (рекомендуется) — плавнее на слабых CPU/APU,",
+                         "    но чуть больше input lag (~1 кадр). Оптимально для большинства.",
+                         "4 = больше VRAM, ещё плавнее, но избыточно для большинства сцен.",
+                         "Для минимальной задержки (competitive) — 2. Для плавности — 3.")
                 .defineInRange("framesInFlight", 3, 2, 4);
         builder.pop();
 

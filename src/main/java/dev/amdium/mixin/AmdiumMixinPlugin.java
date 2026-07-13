@@ -62,7 +62,6 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
     public void onLoad(String mixinConfig) {
         // Проверяем наличие Embedium/Rubidium ОДИН раз при загрузке конфига.
         // ModList может быть ещё не готов на самом раннем этапе, поэтому защищаемся.
-        // / Check for Embedium/Rubidium ONCE when the config loads.
         // ModList might not be ready at the very early stage, so guard against that.
         try {
             boolean emb = FMLLoader.getLoadingModList().getModFileById("embeddium") != null;
@@ -73,7 +72,6 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
         } catch (Throwable t) {
             // ModList ещё не инициализирован — считаем, что ничего нет.
             // На стадии applyMixins флаг будет пересчитан.
-            // / ModList is not initialized yet — assume nothing is present.
             // The flag will be recomputed at shouldApplyMixin time.
             embeddiumPresent = null;
             rubidiumPresent = null;
@@ -104,12 +102,10 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         // Embeddium-специфичные mixin'ы — только если Embeddium/Rubidium установлен.
-        // / Embeddium-specific mixins — only if Embeddium/Rubidium is installed.
         //
         // v2.2 FIX: добавлены SectionRenderDataStorageMixin и RenderRegionMixin —
         // они тоже ссылаются на классы Embeddium (SectionRenderDataStorage, RenderRegion,
         // SectionRenderDataUnsafe, ModelQuadFacing, LocalSectionIndex).
-        // / v2.2 FIX: added SectionRenderDataStorageMixin and RenderRegionMixin —
         // they also reference Embeddium classes (SectionRenderDataStorage, RenderRegion,
         // SectionRenderDataUnsafe, ModelQuadFacing, LocalSectionIndex).
         if (mixinClassName.endsWith("EmbeddiumDrawCommandListMixin")
@@ -121,11 +117,9 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
             if (!apply) {
                 LOGGER.info("[Amdium] Пропускаю {} — Embeddium/Rubidium не обнаружен.",
                         mixinClassName);
-                // / [Amdium] Skipping {} — Embeddium/Rubidium not detected.
             } else {
                 LOGGER.info("[Amdium] Применяю {} — обнаружен Embeddium/Rubidium.",
                         mixinClassName);
-                // / [Amdium] Applying {} — Embeddium/Rubidium detected.
             }
             return apply;
         }
@@ -134,7 +128,6 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
         //  - vanilla path: оркеструет MDI-кадр Amdium (beginFrame/drawLayer/endFrame)
         //  - interop path: ЗАХВАТЫВАЕТ projView + camera + fog для InteropComputeCuller
         //    (draw не делается — Embeddium рисует сама, перехват в EmbeddiumDrawCommandListMixin)
-        // / LevelRendererMixin is needed in BOTH modes:
         //  - vanilla path: orchestrates Amdium's MDI frame
         //  - interop path: CAPTURES projView + camera + fog for InteropComputeCuller
         //    (no draw here — Embeddium draws itself, interception in EmbeddiumDrawCommandListMixin)
@@ -144,7 +137,6 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
 
         // Чисто vanilla-path mixin'ы (VertexBuffer, RenderChunk) — только если
         // Embeddium/Rubidium НЕ установлен (иначе они конфликтуют с Embeddium).
-        // / Pure vanilla-path mixins (VertexBuffer, RenderChunk) — only if
         // Embeddium/Rubidium is NOT installed (otherwise they conflict with Embeddium).
         if (mixinClassName.endsWith("VertexBufferMixin")
                 || mixinClassName.endsWith("RenderChunkMixin")) {
@@ -152,13 +144,11 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
             if (!apply) {
                 LOGGER.info("[Amdium] Пропускаю {} — обнаружен Embeddium/Rubidium, "
                         + "vanilla path не нужен.", mixinClassName);
-                // / [Amdium] Skipping {} — Embeddium/Rubidium detected, vanilla path not needed.
             }
             return apply;
         }
 
         // Остальные mixin'ы (например, MinecraftMixin для cleanup) — применяем всегда.
-        // / Other mixins (e.g. MinecraftMixin for cleanup) — always apply.
         return true;
     }
 
@@ -170,7 +160,6 @@ public class AmdiumMixinPlugin implements IMixinConfigPlugin {
     @Override
     public List<String> getMixins() {
         // Возвращаем null — все mixin'ы берутся из json-конфига.
-        // / Return null — all mixins are taken from the json config.
         return null;
     }
 

@@ -14,37 +14,6 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Центральный координатор Amdium рендерера (v2.3).
- * / Central coordinator of the Amdium renderer (v2.3).
- *
- * ─────────────────────────────────────────────────────────────────────────
- * v2.3 ОПТИМИЗАЦИЯ ПРОИЗВОДИТЕЛЬНОСТИ / v2.3 PERFORMANCE OPTIMIZATION
- * ─────────────────────────────────────────────────────────────────────────
- *
- * v2.2 ПРОБЛЕМЫ / v2.2 PROBLEMS:
- *   1. uploadOrigin вызывал memAllocFloat(4) + memFree() на КАЖДЫЙ upload
- *      чанк-слоя. При rebuild 100+ чанков за раз — 100+ heap allocs.
- *      / uploadOrigin called memAllocFloat(4) + memFree() on EVERY chunk-layer
- *      upload. When rebuilding 100+ chunks at once — 100+ heap allocs.
- *
- *   2. drawMDIWithShader вызывал Minecraft.getInstance().getTextureManager()
- *      .getTexture(LOCATION_BLOCKS).getId() на КАЖДЫЙ слой КАЖДЫЙ кадр —
- *      HashMap lookup + неявная проверка loaded status.
- *      / drawMDIWithShader called Minecraft.getInstance().getTextureManager()
- *      .getTexture(LOCATION_BLOCKS).getId() on EVERY layer EVERY frame —
- *      a HashMap lookup + an implicit loaded-status check.
- *
- *   3. Лишние glBindBuffer(target, 0) после каждого buffer operation.
- *      / Redundant glBindBuffer(target, 0) after every buffer operation.
- *
- * v2.3 ИСПРАВЛЕНИЯ / v2.3 FIXES:
- *   1. uploadOrigin использует MemoryStack (stack-local, без heap alloc).
- *      / uploadOrigin uses MemoryStack (stack-local, no heap alloc).
- *
- *   2. Texture ID block atlas кэшируется и обновляется раз в секунду.
- *      / Block atlas texture ID cached and refreshed once per second.
- *
- *   3. Лишние unbind'ы убраны.
- *      / Redundant unbinds removed.
  */
 public class AmdiumRenderer {
 
@@ -70,17 +39,14 @@ public class AmdiumRenderer {
     private int u_BlockAtlas, u_Lightmap;
     private int u_TextureScale;
 
-    // v2.3: кэш block atlas texture ID (обновляется раз в секунду).
-    // / v2.3: cached block atlas texture ID (refreshed once per second).
+    // Кэш block atlas texture ID (обновляется раз в секунду)
     private int cachedBlockAtlasTexId = -1;
     private long lastAtlasTexIdCheckMs = 0;
     private static final long ATLAS_TEX_CHECK_INTERVAL_MS = 1000L;
 
-    // v2.3: preallocated origin buffer для uploadOrigin (без alloc/free).
-    // / v2.3: preallocated origin buffer for uploadOrigin (no alloc/free).
+    // Preallocated origin buffer (без alloc/free каждый кадр)
     private final float[] originArray = new float[4];
 
-    // Статистика / Statistics
     private int frameChunksTotal = 0;
     private int frameChunksDrawn = 0;
 
@@ -219,8 +185,6 @@ public class AmdiumRenderer {
         GL20.glUniform1f(u_FogEnd, fogEnd);
         GL20.glUniform2f(u_TextureScale, 1.0f / atlasWidth, 1.0f / atlasHeight);
 
-        // v2.3: кэшируем block atlas texture ID (обновляем раз в секунду).
-        // / v2.3: cache the block atlas texture ID (refresh once per second).
         int atlasTexId = amdium$getBlockAtlasTexId();
 
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
@@ -255,12 +219,7 @@ public class AmdiumRenderer {
         RenderSystem.bindTexture(0);
     }
 
-    /**
-     * v2.3: возвращает кэшированный block atlas texture ID.
-     * Обновляется не чаще раза в секунду.
-     * / v2.3: returns the cached block atlas texture ID.
-     * Refreshed no more than once per second.
-     */
+    /** Возвращает кэшированный block atlas texture ID (обновляется раз в секунду). */
     private int amdium$getBlockAtlasTexId() {
         long now = System.currentTimeMillis();
         if (now - lastAtlasTexIdCheckMs > ATLAS_TEX_CHECK_INTERVAL_MS || cachedBlockAtlasTexId <= 0) {
@@ -281,10 +240,7 @@ public class AmdiumRenderer {
         return vertexPool.uploadChunkLayer(packedPos, vanillaVboId, vertexData);
     }
 
-    /**
-     * v2.3: использует preallocated array + MemoryStack вместо alloc/free.
-     * / v2.3: uses a preallocated array + MemoryStack instead of alloc/free.
-     */
+    /** Использует preallocated array + MemoryStack (без alloc/free). */
     public void uploadOrigin(int slot, float originX, float originY, float originZ) {
         if (!initialized || slot < 0) return;
         originArray[0] = originX;
@@ -295,8 +251,6 @@ public class AmdiumRenderer {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             FloatBuffer buf = stack.mallocFloat(4);
             buf.put(originArray).flip();
-            // v2.3: DSA — без bind/unbind, прямой write по ID.
-            // / v2.3: DSA — no bind/unbind, direct write by ID.
             org.lwjgl.opengl.GL45.glNamedBufferSubData(originsSSBOId, (long) slot * 16L, buf);
         }
     }
@@ -327,13 +281,11 @@ public class AmdiumRenderer {
         Amdium.LOGGER.info("[Amdium] Рендерер уничтожен.");
     }
 
-    // ----- Shader compilation ----- / ----- Компиляция шейдеров -----
+    // --- Компиляция шейдеров ---
 
     private int createChunkProgram() throws Exception {
-        int vsh = compileShader(GL20.GL_VERTEX_SHADER,
-                "/assets/amdium/shaders/core/chunk_vertex.vsh");
-        int fsh = compileShader(GL20.GL_FRAGMENT_SHADER,
-                "/assets/amdium/shaders/core/chunk_fragment.fsh");
+        int vsh = compileShader(GL20.GL_VERTEX_SHADER, "/assets/amdium/shaders/core/chunk_vertex.vsh");
+        int fsh = compileShader(GL20.GL_FRAGMENT_SHADER, "/assets/amdium/shaders/core/chunk_fragment.fsh");
 
         int program = GL20.glCreateProgram();
         GL20.glAttachShader(program, vsh);

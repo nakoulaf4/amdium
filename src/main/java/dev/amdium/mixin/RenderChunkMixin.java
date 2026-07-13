@@ -48,18 +48,15 @@ public abstract class RenderChunkMixin {
         if (!Amdium.active) return;
 
         // SectionPos работает с section-координатами (block / 16).
-        // / SectionPos operates on section coordinates (block / 16).
         long packedPos = SectionPos.asLong(
                 SectionPos.blockToSectionCoord(x),
                 SectionPos.blockToSectionCoord(y),
                 SectionPos.blockToSectionCoord(z));
 
         // Origin в world-координатах (float для SSBO origins[slot].xyz).
-        // / World-space origin (float for the origins[slot].xyz SSBO).
         ChunkMetadataStore.register(packedPos, (float) x, (float) y, (float) z);
 
         // Связываем инстансы VertexBuffer с координатами чанка.
-        // / Link VertexBuffer instances to chunk coordinates.
         if (buffers != null) {
             for (Map.Entry<RenderType, VertexBuffer> entry : buffers.entrySet()) {
                 int layerIndex = amdium$getLayerIndex(entry.getKey());
